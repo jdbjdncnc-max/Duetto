@@ -100,6 +100,8 @@ URL 加 `?room=你们的暗号` 开私密房间。
 - **DJ 能力**：聊天中让 TA 放歌、切歌、暂停、继续、分享、红心、加待播队列——直接说就行。
 - **外部记忆接口**：`data/settings.json` 配 `ai.context_url` 指向你自己的记忆/RAG 服务，
   每轮对话 POST `{message, song, user, ai}`，返回的 `{context}` 文本会注入提示词。
+  如果接口需要鉴权，再配 `ai.context_key`；Duetto 会通过 `Authorization: Bearer ...`
+  请求头发送，并在设置读取接口中像模型 Key 一样掩码，不会把密钥返回前端。
 - **提示词透明**：浏览器打开 `/api/prompt-preview`（`?mode=stream` 看完整带思考版）
   能看到发给模型的完整 system 提示词。
 

@@ -13,9 +13,18 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dataDir = process.env.DUETTO_DATA_DIR || path.join(rootDir, 'data');
 const settingsFile = path.join(dataDir, 'settings.json');
 const PORT = Number(process.env.PORT || 4183);
-const DEFAULTS = { user_name:'You', ai_name:'DJ', room_name:'Our Room', room_sub:'', ai:{base_url:'',api_key:'',model:'',persona:''}, show_gallery:true, avatar_url:'', ai_avatar_url:'', background_url:'', theme:'' };
+const DEFAULTS = { user_name:'You', ai_name:'DJ', room_name:'Our Room', room_sub:'', ai:{base_url:'',api_key:'',model:'',persona:'',context_url:'',context_key:''}, show_gallery:true, avatar_url:'', ai_avatar_url:'', background_url:'', theme:'' };
 function getSettings(){ try{ const r=JSON.parse(fs.readFileSync(settingsFile,'utf8')); return {...DEFAULTS,...r,ai:{...DEFAULTS.ai,...(r.ai||{})}}; }catch(e){ return {...DEFAULTS}; } }
-function redactSettings(s){ const out={...s,ai:{...(s&&s.ai||{})}}; if(out.ai.api_key){ out.ai.has_key=true; out.ai.key_hint='****'+String(out.ai.api_key).slice(-4); out.ai.api_key=''; } else { out.ai.has_key=false; out.ai.key_hint=''; } if(out.ai.a_key){ out.ai.has_a_key=true; out.ai.a_key_hint='****'+String(out.ai.a_key).slice(-4); out.ai.a_key=''; } else { out.ai.has_a_key=false; out.ai.a_key_hint=''; } return out; }
+function redactSettings(s){
+  const out={...s,ai:{...(s&&s.ai||{})}};
+  if(out.ai.api_key){ out.ai.has_key=true; out.ai.key_hint='****'+String(out.ai.api_key).slice(-4); out.ai.api_key=''; }
+  else { out.ai.has_key=false; out.ai.key_hint=''; }
+  if(out.ai.a_key){ out.ai.has_a_key=true; out.ai.a_key_hint='****'+String(out.ai.a_key).slice(-4); out.ai.a_key=''; }
+  else { out.ai.has_a_key=false; out.ai.a_key_hint=''; }
+  if(out.ai.context_key){ out.ai.has_context_key=true; out.ai.context_key_hint='****'+String(out.ai.context_key).slice(-4); out.ai.context_key=''; }
+  else { out.ai.has_context_key=false; out.ai.context_key_hint=''; }
+  return out;
+}
 function writePrivate(file, text){ const tmp=file+'.tmp'; fs.writeFileSync(tmp, text, { mode: 0o600 }); try{ fs.chmodSync(tmp, 0o600); }catch(e){} fs.renameSync(tmp, file); try{ fs.chmodSync(file, 0o600); }catch(e){} }
 // ═══ SQLite：长期档案（听歌流水/房间对话/歌曲分析/在场记录/印象）。JSON 只留瞬时状态（settings/cookie/封面缓存） ═══
 fs.mkdirSync(dataDir, { recursive: true });
@@ -66,7 +75,35 @@ function req_ip(q){ try { return (String(q.headers['x-forwarded-for']||'').split
 app.get('/api/health',(_q,r)=>r.json({ok:true,mode:'self-host',version:'1.0.0'}));
 app.get('/api/config',(_q,r)=>{ const s=getSettings(); r.json({ok:true,config:{companion:{name:s.ai_name,has_key:Boolean(s.ai.api_key),model:s.ai.model},user:{display_name:s.user_name},room:{title:s.room_name,subtitle:s.room_sub}}}); });
 app.get('/api/settings',(_q,r)=>{ r.json({ok:true,settings:redactSettings(getSettings())}); });
-app.post('/api/settings',(q,r)=>{ try{ const cur=getSettings(); const b=q.body||{}; const bai={...(b.ai||{})}; const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o,k); const apiKeyProvided=!!(bai.api_key&&!/^\*/.test(String(bai.api_key))); const aKeyProvided=!!(bai.a_key&&!/^\*/.test(String(bai.a_key))); const baseChanging=hasOwn(bai,'base_url')&&String(bai.base_url||'')!==String((cur.ai&&cur.ai.base_url)||''); const aBaseChanging=hasOwn(bai,'a_base')&&String(bai.a_base||'')!==String((cur.ai&&cur.ai.a_base)||''); if(!apiKeyProvided)delete bai.api_key; if(!aKeyProvided)delete bai.a_key; delete bai.has_key; delete bai.key_hint; delete bai.has_a_key; delete bai.a_key_hint; const next={...cur,...b,ai:{...cur.ai,...bai}}; if(baseChanging&&!apiKeyProvided)next.ai.api_key=''; if(aBaseChanging&&!aKeyProvided)next.ai.a_key=''; fs.mkdirSync(dataDir,{recursive:true}); writePrivate(settingsFile,JSON.stringify(next,null,2)); r.json({ok:true,settings:redactSettings(next)}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
+app.post('/api/settings',(q,r)=>{ try{
+  const cur=getSettings();
+  const b=q.body||{};
+  const bai={...(b.ai||{})};
+  const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
+  const supplied=(value)=>!!(value&&!/^\*/.test(String(value)));
+  const apiKeyProvided=supplied(bai.api_key);
+  const aKeyProvided=supplied(bai.a_key);
+  const contextKeyProvided=supplied(bai.context_key);
+  const baseChanging=hasOwn(bai,'base_url')&&String(bai.base_url||'')!==String((cur.ai&&cur.ai.base_url)||'');
+  const aBaseChanging=hasOwn(bai,'a_base')&&String(bai.a_base||'')!==String((cur.ai&&cur.ai.a_base)||'');
+  const contextUrlChanging=hasOwn(bai,'context_url')&&String(bai.context_url||'')!==String((cur.ai&&cur.ai.context_url)||'');
+  if(!apiKeyProvided)delete bai.api_key;
+  if(!aKeyProvided)delete bai.a_key;
+  if(!contextKeyProvided)delete bai.context_key;
+  delete bai.has_key;
+  delete bai.key_hint;
+  delete bai.has_a_key;
+  delete bai.a_key_hint;
+  delete bai.has_context_key;
+  delete bai.context_key_hint;
+  const next={...cur,...b,ai:{...cur.ai,...bai}};
+  if(baseChanging&&!apiKeyProvided)next.ai.api_key='';
+  if(aBaseChanging&&!aKeyProvided)next.ai.a_key='';
+  if(contextUrlChanging&&!contextKeyProvided)next.ai.context_key='';
+  fs.mkdirSync(dataDir,{recursive:true});
+  writePrivate(settingsFile,JSON.stringify(next,null,2));
+  r.json({ok:true,settings:redactSettings(next)});
+}catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 app.post('/api/models',async(q,r)=>{ try{ const {base_url,api_key}=q.body||{}; if(!base_url)return r.status(400).json({ok:false,error:'base_url required'}); const base=String(base_url).replace(/\/+$/,''); if(!/^https:\/\//.test(base)) return r.status(400).json({ok:false,error:'base_url must be https'}); try{ await assertPublicUrl(base); }catch(e){ return r.status(400).json({ok:false,error:'endpoint not allowed'}); } const rr=await fetchT(base+'/models',{headers:api_key?{Authorization:'Bearer '+api_key}:{},redirect:'error'},15000); if(!rr.ok){return r.status(502).json({ok:false,error:'models endpoint returned '+rr.status});} const d=await rr.json(); const arr=Array.isArray(d)?d:(d.data||d.models||[]); r.json({ok:true,models:arr.map(m=>typeof m==='string'?m:(m.id||m.name||m.model||'')).filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hans-CN'))}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object'){ for(const k of ['model','persona','style','ai_name','user_name','time_aware','reply_mode','a_model']){ const v=over[k]; if(v!==undefined&&v!==null&&v!=='')out[k]=v; } if(over.base_url&&over.api_key){ out.base_url=over.base_url; out.api_key=over.api_key; } if(over.a_base&&over.a_key){ out.a_base=over.a_base; out.a_key=over.a_key; } } return out; }
 // ═══ SSRF 防线：解析主机名，若任一 IP 落在私网/环回/链路本地段则拒绝 ═══
@@ -117,7 +154,10 @@ async function fetchContext(s, prompt, np){
   const u = s.ai && s.ai.context_url; if (!u || !/^https:/.test(String(u))) return '';
   try {
     await assertPublicUrl(String(u));
-    const rr = await fetchT(String(u), { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ message:String(prompt||''), song: np?{id:np.id,title:np.title,artist:np.artist}:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') }) }, 4000);
+    const headers={'Content-Type':'application/json'};
+    const contextKey=String((s.ai&&s.ai.context_key)||'').trim();
+    if(contextKey)headers.Authorization='Bearer '+contextKey;
+    const rr = await fetchT(String(u), { method:'POST', headers, body: JSON.stringify({ message:String(prompt||''), song: np?{id:np.id,title:np.title,artist:np.artist}:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') }) }, 4000);
     if (!rr.ok) return '';
     const d = await rr.json().catch(()=>null);
     return String((d && (d.context || d.text || d.memory)) || '').slice(0, 4000);

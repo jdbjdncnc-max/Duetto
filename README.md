@@ -60,7 +60,9 @@ Leave it empty to use the chat model. Server-side defaults: `ai.a_model` / `ai.a
 
 **External memory (optional).** Set `ai.context_url` in `data/settings.json` to a POST endpoint of
 your own. Each chat turn Duetto sends `{message, song, user, ai}` and injects the returned
-`{context}` text into the prompt as shared memory. 4-second budget; failures are silent.
+`{context}` text into the prompt as shared memory. Set `ai.context_key` to send it as an
+`Authorization: Bearer ...` header. The key is masked by `GET /api/settings`, just like the model
+keys. 4-second budget; failures are silent.
 
 ## How it works
 
