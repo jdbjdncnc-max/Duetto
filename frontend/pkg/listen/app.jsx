@@ -525,7 +525,7 @@ function LSApp() {
         {view === 'together' && (
           <div className="ls-together">
             <div className="ls-seg ls-tog-seg">
-              {[['archive', '听歌档案'], ['model', '模型设置']].map(([k, l]) => (
+              {[['archive', '听歌档案'], ['model', '身份与模型']].map(([k, l]) => (
                 <button key={k} className={togetherTab === k ? 'on' : ''} onClick={() => setTogetherTab(k)}>{l}</button>
               ))}
             </div>

@@ -40,10 +40,11 @@
     if(history)body.history=history;
     return fetch(API+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json();})
-      .then(function(d){ if(d&&d.ok){ try{window.__lsLastThink=String(d.think||'');}catch(e){} return d.reply||''; } return '[AI not set up yet - add your endpoint + key in Settings or the Model tab]'; })
+      .then(function(d){ if(d&&d.ok){ try{window.__lsLastThink=String(d.think||'');window.__lsLastResponseMeta={model:String(d.model||ai.model||''),usage:d.usage||null};}catch(e){} return d.reply||''; } return '[AI not set up yet - add your endpoint + key in Settings or the Model tab]'; })
       .catch(function(e){ return '[AI error: '+(e&&e.message||e)+']'; });
   }
   function complete(prompt, opts){
+    try{window.__lsLastResponseMeta=null;}catch(e){}
     var ai=aiConfig();
     var np=nowPlaying(opts);
     var history=historyOf(opts);

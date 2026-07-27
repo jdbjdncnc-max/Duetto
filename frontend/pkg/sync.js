@@ -6,7 +6,7 @@
   function connect(){
     try{ ws=new WebSocket(wsurl()); }catch(e){ setTimeout(connect,3000); return; }
     ws.onopen=function(){ connected=true; };
-    ws.onmessage=function(ev){ try{ var m=JSON.parse(ev.data); if(m&&m.t==='ai'){ var cb=aiPending[m.id]; if(cb){ delete aiPending[m.id]; try{window.__lsLastThink=String(m.think||'');}catch(e){} cb(m.reply); } return; } if(m&&m.t==='chat'){ if(window.__lsRoomChatIn) window.__lsRoomChatIn(m.msg); return; } applying=true; if(window.__lsApplyRemote) window.__lsApplyRemote(m); }catch(e){} finally{ applying=false; } };
+    ws.onmessage=function(ev){ try{ var m=JSON.parse(ev.data); if(m&&m.t==='ai'){ var cb=aiPending[m.id]; if(cb){ delete aiPending[m.id]; try{window.__lsLastThink=String(m.think||'');window.__lsLastResponseMeta={model:String(m.model||''),usage:m.usage||null};}catch(e){} cb(m.reply); } return; } if(m&&m.t==='chat'){ if(window.__lsRoomChatIn) window.__lsRoomChatIn(m.msg); return; } applying=true; if(window.__lsApplyRemote) window.__lsApplyRemote(m); }catch(e){} finally{ applying=false; } };
     ws.onclose=function(){ connected=false; setTimeout(connect,3000); };
     ws.onerror=function(){};
   }

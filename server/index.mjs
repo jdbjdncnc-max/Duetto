@@ -344,8 +344,41 @@ function deStar(parts){ return parts.map(x=>String(x).replace(/^\*{1,2}([^*]+)\*
 // 分析模型三件套：只填了模型名就回落聊天端点密钥
 function withAnalysisAi(s){ const a=s.ai||{}; if(!(a.a_model||a.a_key||a.a_base)) return s; return { ...s, ai:{ ...a, base_url:a.a_base||a.base_url, api_key:a.a_key||a.api_key, model:a.a_model||a.model } }; }
 async function fetchT(url,opts,ms){ const ac=new AbortController(); const t=setTimeout(function(){ ac.abort(); },ms||30000); try{ return await fetch(url,{...opts,signal:ac.signal}); } finally { clearTimeout(t); } }
-async function callLLM(s,messages,over){ const base=String(s.ai.base_url||'').replace(/\/+$/,''); if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503}); const rr=await fetchT(base+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key},body:JSON.stringify({model:(over&&over.model)||s.ai.model,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000); if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});} const d=await rr.json(); return (d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim(); }
-app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,120); await enrichNp(s,np); } const ctx=await fetchContext(s, prompt, np); const raw=await callLLM(s,[{role:'system',content:sysPrompt(s,kind,np,ctx)},...past,{role:'user',content:String(prompt)}]); let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+function tokenCount(v){ if(v==null||v==='')return null; const n=Number(v); return Number.isFinite(n)&&n>=0?Math.round(n):null; }
+function normalizeUsage(raw){
+  if(!raw||typeof raw!=='object')return null;
+  const pd=raw.prompt_tokens_details||raw.input_tokens_details||{};
+  const prompt=tokenCount(raw.prompt_tokens!=null?raw.prompt_tokens:raw.input_tokens);
+  const completion=tokenCount(raw.completion_tokens!=null?raw.completion_tokens:raw.output_tokens);
+  let total=tokenCount(raw.total_tokens);
+  if(total==null&&prompt!=null&&completion!=null)total=prompt+completion;
+  const cacheFields=[
+    pd.cached_tokens,
+    raw.cached_tokens,
+    raw.cache_read_input_tokens,
+    raw.prompt_cache_hit_tokens,
+    raw.cached_content_token_count
+  ];
+  let cached=null;
+  for(const value of cacheFields){ const n=tokenCount(value); if(n!=null){ cached=n; break; } }
+  if(prompt==null&&completion==null&&total==null&&cached==null)return null;
+  return {prompt_tokens:prompt,completion_tokens:completion,total_tokens:total,cached_tokens:cached};
+}
+async function callLLMResult(s,messages,over){
+  const base=String(s.ai.base_url||'').replace(/\/+$/,'');
+  if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503});
+  const requestedModel=(over&&over.model)||s.ai.model;
+  const rr=await fetchT(base+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key},body:JSON.stringify({model:requestedModel,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000);
+  if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});}
+  const d=await rr.json();
+  return {
+    text:(d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim(),
+    model:String(d.model||requestedModel||''),
+    usage:normalizeUsage(d.usage)
+  };
+}
+async function callLLM(s,messages,over){ return (await callLLMResult(s,messages,over)).text; }
+app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,120); await enrichNp(s,np); } const ctx=await fetchContext(s, prompt, np); const result=await callLLMResult(s,[{role:'system',content:sysPrompt(s,kind,np,ctx)},...past,{role:'user',content:String(prompt)}]); const raw=result.text; let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think,model:result.model,usage:result.usage}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— Song analysis: cached per song id so each song is analyzed once ——
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
 function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
@@ -449,10 +482,11 @@ wss.on('connection', (sock, req) => {
         const past = Array.isArray(hist) ? hist.slice(-12).filter(x=>x&&x.role&&typeof x.content==='string') : [];
         if (np) { if (m.ai && m.ai.quote) np.quote = String(m.ai.quote).slice(0,120); await enrichNp(eff, np); }
         const ctx2 = await fetchContext(eff, m.prompt, np);
-        const raw2 = await callLLM(eff, [{ role:'system', content: sysPrompt(eff, 'music', np, ctx2) }, ...past, { role:'user', content: String(m.prompt||'') }]);
+        const result2 = await callLLMResult(eff, [{ role:'system', content: sysPrompt(eff, 'music', np, ctx2) }, ...past, { role:'user', content: String(m.prompt||'') }]);
+        const raw2 = result2.text;
         let reply, think2=''; if (eff.ai.reply_mode==='stream') { const st=stripThinking(raw2); reply=st.text; think2=st.think; } else { reply=deStar(parseReplies(raw2)).join('\n'); }
         if (!(m.ai && m.ai.no_note)) logRoomNote(eff, np, m.prompt, reply);
-        sock.send(JSON.stringify({ t:'ai', id:m.id, reply, think: think2 }));
+        sock.send(JSON.stringify({ t:'ai', id:m.id, reply, think: think2, model:result2.model, usage:result2.usage }));
       } catch(e) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI error: '+e.message+']' })); }
       return;
     }

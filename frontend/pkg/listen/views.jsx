@@ -722,6 +722,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
   const [chat, setChat] = vUseState(() => { try { const r = localStorage.getItem('ls-room-chat'); if (r) { const a = JSON.parse(r); if (a && a.length) return a.map(function (m) { return (m && m.time === '此刻') ? Object.assign({}, m, { time: '' }) : m; }); } } catch (e) {} return []; });
   vUseEffect(() => { try { localStorage.setItem('ls-room-chat', JSON.stringify(chat.filter(function (m) { return !m.pending; }).slice(-120))); } catch (e) {} }, [chat]);
   const [busy, setBusy] = vUseState(false);
+  const [copiedKey, setCopiedKey] = vUseState('');
   const [topStyle, setTopStyle] = vUseState(() => { try { return localStorage.getItem('ls-room-top') || 'baseline'; } catch (e) { return 'baseline'; } });
   const [bgOn, setBgOn] = vUseState(() => { try { return localStorage.getItem('ls-room-bg-on') === '1'; } catch (e) { return false; } });
   const [roomSetOpen, setRoomSetOpen] = vUseState(false);
@@ -926,9 +927,16 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
       ".lsr-bubble{max-width:100%;border-radius:20px;padding:7px 11px 8px;line-height:1.7;font-size:13px;font-family:var(--ls-cn);white-space:pre-wrap;overflow-wrap:anywhere}",
       ".lsr-row.self .lsr-bubble{background:var(--lsr-bub-self,color-mix(in srgb, var(--ls-panel) 15%, #fff));color:var(--ls-ink);border:1px solid color-mix(in srgb, #fff 72%, var(--ls-bg));border-bottom-right-radius:6px;backdrop-filter:blur(var(--lsr-blur-self,0px));-webkit-backdrop-filter:blur(var(--lsr-blur-self,0px))}",
       ".lsr-row.other .lsr-bubble{background:var(--lsr-bub-other,color-mix(in srgb, var(--ls-bg) 15%, #fff));color:var(--ls-ink);border:1px solid color-mix(in srgb, #fff 72%, var(--ls-bg));border-bottom-left-radius:6px;backdrop-filter:blur(var(--lsr-blur-other,10px));-webkit-backdrop-filter:blur(var(--lsr-blur-other,10px))}",
-      ".lsr-time{font-family:var(--ls-meta);font-size:9px;color:var(--ls-ink-faint);position:absolute;bottom:2px;white-space:nowrap}",
-      ".lsr-row.other .lsr-time{left:100%;margin-left:5px}",
-      ".lsr-row.self .lsr-time{right:100%;margin-right:5px}",
+      ".lsr-meta{width:100%;display:flex;align-items:center;gap:6px;min-height:22px;padding:0 3px;color:var(--ls-ink-faint)}",
+      ".lsr-row.self .lsr-meta{justify-content:flex-end}",
+      ".lsr-row.other .lsr-meta{justify-content:flex-start}",
+      ".lsr-time{font-family:var(--ls-meta);font-size:9px;color:inherit;white-space:nowrap}",
+      ".lsr-usage{font-family:var(--ls-meta);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+      ".lsr-copy{width:32px;height:32px;margin:-5px 0;border:none;border-radius:9px;background:transparent;color:inherit;display:flex;align-items:center;justify-content:center;padding:0;cursor:pointer;transition:color .15s,background .15s,transform .15s}",
+      ".lsr-copy:hover,.lsr-copy:focus-visible{color:var(--ls-ink-dim);background:color-mix(in srgb,var(--ls-panel) 58%,transparent);outline:none}",
+      ".lsr-copy:active{transform:scale(.92)}",
+      ".lsr-copy.ok{color:var(--ls-gold)}",
+      ".lsr-copy svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}",
       ".lsr-row.runfirst{margin-top:7px}",
       ".lsr-bq{margin:0 0 6px;padding:6px 10px;border-radius:10px;background:color-mix(in srgb,var(--ls-ink) 8%,transparent);font-size:12px;line-height:1.55;color:var(--ls-ink-dim);white-space:pre-wrap}",
       ".lsr-bq .bq-src{display:block;font-size:9.5px;opacity:.72;margin-bottom:2px;font-family:var(--ls-meta)}",
@@ -960,6 +968,23 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
 
   const toggleLike = (i) => setComments(cs => cs.map((c, j) => j === i
     ? { ...c, liked: !c.liked, likes: c.likes + (c.liked ? -1 : 1) } : c));
+  const copyMessage = async (key, text) => {
+    const value = String(text || '');
+    if (!value) return;
+    let ok = false;
+    try { if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(value); ok = true; } } catch (e) {}
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = value; ta.setAttribute('readonly', ''); ta.style.position = 'fixed'; ta.style.opacity = '0';
+        document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); ta.remove();
+      } catch (e) {}
+    }
+    if (ok) { setCopiedKey(key); setTimeout(() => setCopiedKey(k => k === key ? '' : k), 1500); }
+  };
+  const copyIcon = (ok) => ok
+    ? <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4 4L19 7"/></svg>
+    : <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg>;
 
   // 底部功能按钮（handler 优先 props，未传则退回全局）；手点先标记 user，盖掉可能残留的 AI 标记
   const markUser = () => { window.__lsActor = { who: 'user', t: Date.now() }; };
@@ -1000,6 +1025,8 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
     let reply = '';
     try { reply = await window.claude.complete(promptText, { history: hist.slice(0, -1), quote: qv || undefined }); } catch (e) { reply = ''; }
     reply = String(reply || '');
+    const responseMeta = window.__lsLastResponseMeta || null;
+    try { window.__lsLastResponseMeta = null; } catch (e) {}
     // AI DJ：抽取 <<ACT>>{...}<<>> 交给播放器执行，再从展示文本里删掉整段
     const ACT = /<<ACT>>(\{[\s\S]*?\})<<>>/;
     const m = reply.match(ACT);
@@ -1011,6 +1038,11 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
     const parts = isStream ? (shown ? [shown] : []) : shown.split(/\n+/).map(x => x.trim()).filter(Boolean);
     const aiMsgs = (parts.length ? parts : ['（放好了，一起听）']).map(t2 => ({ who: 'yu', t: t2, time: lsNow(), ts: Date.now() }));
     if (isStream && think && aiMsgs.length) aiMsgs[0].think = think;
+    if (responseMeta && aiMsgs.length) {
+      const last = aiMsgs[aiMsgs.length - 1];
+      if (responseMeta.model) last.model = responseMeta.model;
+      if (responseMeta.usage) last.usage = responseMeta.usage;
+    }
     setChat(c => {
       const arr = c.slice();
       for (let i = arr.length - 1; i >= 0; i--) { if (arr[i].pending) { arr.splice(i, 1, ...aiMsgs); break; } }
@@ -1135,6 +1167,13 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
           const s = m.songId && songById(m.songId);
           const prev = chat[i - 1];
           const firstOfRun = !prev || prev.sys || prev.who === 'sys' || prev.who !== m.who;
+          const messageKey = String(m.ts || 'row') + '-' + i;
+          const usage = !self && m.usage && typeof m.usage === 'object' ? m.usage : null;
+          const totalTokens = usage && usage.total_tokens != null ? Number(usage.total_tokens) : null;
+          const cachedTokens = usage && usage.cached_tokens != null ? Number(usage.cached_tokens) : null;
+          const totalLabel = Number.isFinite(totalTokens) ? totalTokens.toLocaleString('zh-CN') : '';
+          const cachedLabel = Number.isFinite(cachedTokens) ? cachedTokens.toLocaleString('zh-CN') : '';
+          const copyValue = (m.quote ? ('「' + m.quote + '」\n') : '') + String(m.t || '');
           return (
             <div key={i} className={'lsr-row ' + (self ? 'self' : 'other') + (firstOfRun && i > 0 ? ' runfirst' : '')}>
               {!self && !hideAvas && (firstOfRun ? <div className="lsr-ava"><LSFace who="yu" /></div> : <div className="lsr-ava ghost"></div>)}
@@ -1143,7 +1182,11 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
                 {(m.t || m.quote) ? <div className="lsr-bubble">{m.quote ? <div className="lsr-bq"><span className="bq-src">♪ {m.qsong || '歌词'}</span>{m.quote}</div> : null}{m.t}</div> : null}
                 {m.share && (<div className="lsr-share" onClick={() => playSharedNcm(m.share)}><div className="cv"><LSCover cover={m.share.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{(self ? eveName : yuName) + ' · 分享'}</div><b>{m.share.title}</b><span>{m.share.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playSharedNcm(m.share); }}>{String(song.id) === String(m.share.id) && isPlaying ? <span className="eq2"><i></i><i></i><i></i></span> : LSIcon.play()}</button></div>)}
                 {s && (<div className="lsr-share" onClick={() => playShared(s)}><div className="cv"><LSCover cover={s.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{(self ? eveName : yuName) + ' · 分享'}</div><b>{s.title}</b><span>{s.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playShared(s); }}>{LSIcon.play()}</button></div>)}
-                {m.time ? <div className="lsr-time">{m.time}</div> : null}
+                {(m.time || Number.isFinite(totalTokens) || m.t) ? <div className="lsr-meta">
+                  {m.time ? <span className="lsr-time">{m.time}</span> : null}
+                  {Number.isFinite(totalTokens) ? <span className="lsr-usage" title={(m.model ? ('模型：' + m.model + ' · ') : '') + (Number.isFinite(cachedTokens) ? ('缓存 Token：' + cachedLabel) : '服务商未返回缓存 Token')}>总计 {totalLabel} · {Number.isFinite(cachedTokens) ? ('缓存 ' + cachedLabel) : '缓存未返回'}</span> : null}
+                  {m.t ? <button type="button" className={'lsr-copy' + (copiedKey === messageKey ? ' ok' : '')} onClick={() => copyMessage(messageKey, copyValue)} aria-label={copiedKey === messageKey ? '已复制' : '复制消息'} title={copiedKey === messageKey ? '已复制' : '复制消息'}>{copyIcon(copiedKey === messageKey)}</button> : null}
+                </div> : null}
               </div>
               {self && !hideAvas && (firstOfRun ? <div className="lsr-ava"><LSFace who="eve" /></div> : <div className="lsr-ava ghost"></div>)}
             </div>

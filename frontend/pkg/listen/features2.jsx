@@ -218,16 +218,45 @@ function LSModelInline({ bump }) {
         : <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/></svg>}
     </button>
   );
+  const pickAvatar = (slotId) => {
+    try {
+      const slot = document.getElementById(slotId);
+      const input = slot && slot.shadowRoot && slot.shadowRoot.querySelector('input[type="file"]');
+      if (input) input.click();
+    } catch (e) {}
+  };
+  const cameraIcon = (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M4 8.5h3l1.4-2h7.2l1.4 2h3v10H4z"/><circle cx="12" cy="13.5" r="3.3"/>
+    </svg>
+  );
   return (
     <div className="ls-modelinline">
-      <div className="ls-arc-head"><div className="ls-arc-h">模型设置<span>一起听陪聊回复 · 分析歌曲 双模型</span></div></div>
+      <div className="ls-arc-head"><div className="ls-arc-h">身份与模型<span>设置你们的头像、名称和陪聊模型</span></div></div>
 
-      <div className="ls-model-group">
-        <div className="ls-model-gh">昵称设置（替换档案/房间里的名字）</div>
-        <div className="ls-fld"><label>你的昵称</label>
-          <input value={userNick} onChange={e => setUserNick(e.target.value)} placeholder="You" /></div>
-        <div className="ls-fld"><label>AI 昵称</label>
-          <input value={aiNick} onChange={e => setAiNick(e.target.value)} placeholder="AI" /></div>
+      <div className="ls-identity-grid">
+        <section className="ls-identity-card">
+          <div className="ls-identity-kind">你</div>
+          <div className="ls-identity-avatar">
+            <image-slot id={LS_PEOPLE.eve.slot} shape="circle" tap-replace placeholder=""></image-slot>
+            <button type="button" onClick={() => pickAvatar(LS_PEOPLE.eve.slot)} aria-label="上传你的头像" title="上传头像">{cameraIcon}</button>
+          </div>
+          <label className="ls-identity-label" htmlFor="ls-user-name">名称</label>
+          <input id="ls-user-name" className="ls-identity-name" value={userNick} onChange={e => setUserNick(e.target.value)} placeholder="You" />
+          <div className="ls-identity-sub">头像只保存在这台设备</div>
+        </section>
+        <section className="ls-identity-card ai">
+          <div className="ls-identity-kind">TA</div>
+          <div className="ls-identity-avatar">
+            <image-slot id={LS_PEOPLE.yu.slot} shape="circle" tap-replace placeholder=""></image-slot>
+            <button type="button" onClick={() => pickAvatar(LS_PEOPLE.yu.slot)} aria-label="上传 TA 的头像" title="上传头像">{cameraIcon}</button>
+          </div>
+          <label className="ls-identity-label" htmlFor="ls-ai-name">名称</label>
+          <input id="ls-ai-name" className="ls-identity-name" value={aiNick} onChange={e => setAiNick(e.target.value)} placeholder="AI" />
+          <div className="ls-identity-model" title={cName || '尚未选择聊天模型'}>
+            <span>模型</span><b>{cName || '未选择'}</b>
+          </div>
+        </section>
       </div>
 
       <div className="ls-model-group">
@@ -273,7 +302,7 @@ function LSModelInline({ bump }) {
       <button className={'ls-save ' + state} onClick={save} disabled={state === 'saving'}>
         {state === 'idle' && '保存'}{state === 'saving' && '保存中…'}{state === 'ok' && '已保存 ✓'}{state === 'err' && '保存失败，重试'}
       </button>
-      <div className="ls-model-note">Key 只存在本地浏览器；陪聊模型用于一起听时 AI 回复，分析模型用于真听一遍歌。</div>
+      <div className="ls-model-note">头像与 Key 只存在本地浏览器；陪聊模型用于一起听时 AI 回复，分析模型用于真听一遍歌。</div>
     </div>
   );
 }
