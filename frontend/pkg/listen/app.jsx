@@ -1,5 +1,5 @@
 /* listen/app.jsx — 「一起听歌」根。
-   底栏：此刻(播放) · 歌单(资料) · 曲库(搜索+日推+FM) · 一起听(档案+歌库+设置)。
+   底栏：此刻(播放) · 歌单(资料) · 曲库(搜索+日推+FM) · 在读(共读书架) · 一起听(档案+设置)。
    播放页：黑胶/卡片封面切换、滑动切纯歌词、队列、播放方式、问 Ta、详情抽屉。 */
 
 const { useState: aUseState, useEffect: aUseEffect, useRef: aUseRef } = React;
@@ -36,7 +36,7 @@ function LSApp() {
   const [customAc, setCustomAc] = aUseState(() => localStorage.getItem('ls-skin-custom') || '#c99bb0');
   const [customVars, setCustomVars] = aUseState(() => { try { return JSON.parse(localStorage.getItem('ls-skin-diy') || '{}'); } catch (e) { return {}; } });
   const [darkMode, setDarkMode] = aUseState(() => { try { return localStorage.getItem('ls-dark') === '1'; } catch (e) { return false; } });
-  const [view, setView] = aUseState('player');         // player | playlist | browse | together
+  const [view, setView] = aUseState('player');         // player | playlist | browse | books | together
   const [idx, setIdx]   = aUseState(0);
   const [playing, setPlaying] = aUseState(false);
   const [cur, setCur]   = aUseState(0);
@@ -72,6 +72,7 @@ function LSApp() {
   const [ncmLyric, setNcmLyric] = aUseState('');
   const [ncmQueue, setNcmQueue] = aUseState(null);
   const [ncmDrawerSong, setNcmDrawerSong] = aUseState(null);
+  const [readingBook, setReadingBook] = aUseState(null);
   const fmFetchRef = aUseRef({ busy: false });
 
   aUseEffect(() => { localStorage.setItem('ls-skin', skin); }, [skin]);
@@ -447,6 +448,11 @@ function LSApp() {
 
   aUseEffect(() => {
     window.__lsApplyRemote = function(m){
+      if (m && m.t === 'read') {
+        window.__lsBookRemote = m;
+        try { window.dispatchEvent(new CustomEvent('ls-book-remote', { detail: m })); } catch (e) {}
+        return;
+      }
       // 远端同步来的状态：记录来源，让广播 effect 据此跳过回声（不再依赖 250ms 计时窗口）
       window.__lsLastRemote = { action: m.action, idx: (m.idx != null ? m.idx : null) };
       window.__lsRemoteEvt = Date.now(); // 状态卡片门控：远程同步来的变化不是本人的操作，不发卡
@@ -455,6 +461,10 @@ function LSApp() {
       else if (m.action === 'pause') setPlaying(false);
       if (m.action === 'seek' && m.val != null) { try { lsAudioEl.currentTime = m.val; } catch(e){} }
     };
+  }, []);
+  aUseEffect(() => {
+    window.__lsOpenRoom = function () { setRoomOpen(true); };
+    return function () { try { delete window.__lsOpenRoom; } catch (e) {} };
   }, []);
   aUseEffect(() => {
     // 首次挂载不广播：避免把初始 pause 态推给整个房间、误停别的设备
@@ -492,8 +502,8 @@ function LSApp() {
     H('seekto', function (d) { try { if (d && d.seekTime != null) { lsAudioEl.currentTime = d.seekTime; setCur(Math.floor(d.seekTime)); } } catch (e) {} });
   }, [ncmSong, playing, idx, ncmQueue]);
   const skinObj = LS_SKINS.find(s => s.id === skin) || LS_SKINS[0];
-  const titles = { player: '此刻', playlist: '歌单', browse: '曲库', together: '一起听' };
-  const kickers = { player: '正在一起听', playlist: '资料 · 歌单', browse: '搜索 · 日推 · 私人FM', together: '听歌档案 · 歌库 · 设置' };
+  const titles = { player: '此刻', playlist: '歌单', browse: '曲库', books: '在读', together: '一起听' };
+  const kickers = { player: '正在一起听', playlist: '资料 · 歌单', browse: '搜索 · 日推 · 私人FM', books: readingBook ? '同一本书 · 同一个房间' : '书架 · 进度 · 批注', together: '听歌档案 · 身份与模型' };
 
   return (
     <div className={'ls-app ls-skin-' + skin + (wallOn ? ' has-wall' : '') + (wallOn && (wallBlur || 0) <= 0 ? ' no-blur' : '')} style={{ '--ls-wall-veil': wallVeil, '--ls-wall-blur': wallBlur + 'px', '--ls-card-veil': cardVeil, '--ls-card-blur': cardBlur, '--ls-nav-a': navVeil, '--ls-nav-blur': navBlur + 'px', ...(skin === 'custom' ? Object.assign({ '--ls-bg': customAc, '--ls-amb': customAc }, customVars.accent ? { '--ls-gold': customVars.accent, '--ls-eve': customVars.accent } : {}, customVars.panel ? { '--ls-panel': customVars.panel, '--ls-panel2': customVars.panel } : {}, customVars.ink ? { '--ls-ink': customVars.ink } : {}, customVars.line ? { '--ls-line': customVars.line, '--ls-line-soft': customVars.line } : {}, customVars.lyric ? { '--ls-lyric-dim': customVars.lyric } : {}) : {}), ...(darkMode ? { '--ls-bg': '#17171b', '--ls-bg2': '#1f1f25', '--ls-panel': '#26262e', '--ls-panel2': '#2e2e37', '--ls-ink': '#f0eef2', '--ls-ink-dim': '#b0aab8', '--ls-ink-faint': '#7a7585', '--ls-line': '#3a3a44', '--ls-line-soft': '#33333c', '--ls-amb': '#17171b', '--ls-shadow': 'rgba(0,0,0,.5)' } : {}) }}>
@@ -522,6 +532,9 @@ function LSApp() {
         )}
         {view === 'playlist' && <LSPlaylistView onPlay={playSong} onOpenSong={(s) => setNcmDrawerSong(s)} openPl={openPl} setOpenPl={setOpenPl} wallOn={wallOn} setWallOn={setWallOn} wallVeil={wallVeil} setWallVeil={setWallVeil} wallBlur={wallBlur} setWallBlur={setWallBlur} cardVeil={cardVeil} setCardVeil={setCardVeil} cardBlur={cardBlur} setCardBlur={setCardBlur} navVeil={navVeil} setNavVeil={setNavVeil} navBlur={navBlur} setNavBlur={setNavBlur} skin={skin} setSkin={setSkin} customAc={customAc} setCustomAc={setCustomAc} customVars={customVars} setCustomVars={setCustomVars} darkMode={darkMode} setDarkMode={setDarkMode} />}
         {view === 'browse' && <LSBrowseView onPlay={playSong} onOpenSong={(s) => setNcmDrawerSong(s)} onOpenFM={() => setFmOpen(true)} />}
+        {view === 'books' && (readingBook
+          ? <LSReaderView bookId={readingBook.id} onBack={() => setReadingBook(null)} onOpenRoom={() => setRoomOpen(true)} />
+          : <LSShelfView onOpenBook={(book) => setReadingBook(book)} />)}
         {view === 'together' && (
           <div className="ls-together">
             <div className="ls-seg ls-tog-seg">
@@ -547,6 +560,10 @@ function LSApp() {
           <button className={view === 'browse' ? 'on' : ''} onClick={() => setView('browse')}>
             <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" strokeWidth="1.8"/><path d="M21 21l-4-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
             <span className="lb">曲库</span>
+          </button>
+          <button className={view === 'books' ? 'on' : ''} onClick={() => setView('books')}>
+            <svg viewBox="0 0 24 24"><path d="M4.5 5.2A2.7 2.7 0 0 1 7.2 3H11v16H7.2a2.7 2.7 0 0 0-2.7 2V5.2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/><path d="M19.5 5.2A2.7 2.7 0 0 0 16.8 3H13v16h3.8a2.7 2.7 0 0 1 2.7 2V5.2z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round"/></svg>
+            <span className="lb">在读</span>
           </button>
           <button className={view === 'together' ? 'on' : ''} onClick={() => setView('together')}>
             <svg viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-10-9.2C.4 8.6 2 5 5.4 5c2 0 3.3 1.1 4.1 2.3C10.3 6.1 11.6 5 13.6 5 17 5 18.6 8.6 17 11.8 14.5 16.4 12 21 12 21z"/></svg>

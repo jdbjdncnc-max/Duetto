@@ -754,7 +754,16 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
   const toggleAvas = () => setHideAvas(function (h) { const nh = !h; try { localStorage.setItem('ls-room-hideava', nh ? '1' : '0'); } catch (e) {} return nh; });
   const [lyrQuote, setLyrQuote] = vUseState('');
   const [lyrQuoteSong, setLyrQuoteSong] = vUseState('');
-  vUseEffect(function () { try { var pq = window.__lsPendingQuote; if (pq && pq.line) { setLyrQuote(pq.line); setLyrQuoteSong(pq.song || ''); window.__lsPendingQuote = null; } } catch (e) {} }, []);
+  const [bookQuote, setBookQuote] = vUseState(null);
+  vUseEffect(function () { try {
+    var pq = window.__lsPendingQuote;
+    if (pq && (pq.line || pq.kind === 'book')) {
+      setLyrQuote(pq.line || '');
+      setLyrQuoteSong(pq.song || '');
+      setBookQuote(pq.kind === 'book' ? { id: pq.book_id || '', title: pq.book || '', block_idx: Number(pq.block_idx) || 0 } : null);
+      window.__lsPendingQuote = null;
+    }
+  } catch (e) {} }, []);
   const [replyMode, setReplyMode] = vUseState(function () { try { return localStorage.getItem('ls-room-replymode') || 'bubbles'; } catch (e) { return 'bubbles'; } });
   const setRM = function (v) { setReplyMode(v); try { localStorage.setItem('ls-room-replymode', v); } catch (e) {} };
   const [timeAware, setTimeAware] = vUseState(function () { try { return localStorage.getItem('ls-room-timeaware') !== '0'; } catch (e) { return true; } });
@@ -1009,9 +1018,9 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
   const send = async () => {
     const text = draft.trim();
     if (!text || busy) return;
-    const qv = lyrQuote; const qsongName = lyrQuoteSong || (song && song.title) || ''; setLyrQuote(''); setLyrQuoteSong('');
+    const qv = lyrQuote; const qsongName = lyrQuoteSong || (song && song.title) || ''; const qbookInfo = bookQuote; setLyrQuote(''); setLyrQuoteSong(''); setBookQuote(null);
     setDraft('');
-    const userMsg = { who: 'eve', t: text, quote: qv || undefined, qsong: qv ? qsongName : undefined, time: lsNow(), ts: Date.now() };
+    const userMsg = { who: 'eve', t: text, quote: qv || undefined, qsong: qv && !qbookInfo ? qsongName : undefined, qbook: qbookInfo ? qbookInfo.title : undefined, qblock: qbookInfo ? qbookInfo.block_idx : undefined, book_id: qbookInfo ? qbookInfo.id : undefined, time: lsNow(), ts: Date.now() };
     setChat(c => [...c, userMsg]);
     bcast(userMsg);
     // 仅「点歌聊」走 AI DJ；其余标签保持原样
@@ -1020,10 +1029,15 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
     setChat(c => [...c, { who: 'yu', t: '…', time: lsNow(), pending: true }]);
     // 带上房间最近的对话当上下文（宫殿式多轮，而不是每条都单轮）
     const hist = chat.filter(m => m && !m.sys && !m.pending && m.t).slice(-12).map(m => ({ role: m.who === 'eve' ? 'user' : 'assistant', content: m.t }));
-    const promptText = qv ? ('（指着正在放的这句歌词跟你说：「' + qv + '」）\n' + text) : text;
+    const promptText = qbookInfo
+      ? ((qv ? ('（指着《' + (qbookInfo.title || '这本书') + '》里的这段文字跟你说：「' + qv + '」）\n') : ('（我们刚才正在一起读《' + (qbookInfo.title || '这本书') + '》。）\n')) + text)
+      : (qv ? ('（指着正在放的这句歌词跟你说：「' + qv + '」）\n' + text) : text);
     hist.push({ role: 'user', content: promptText });
     let reply = '';
-    try { reply = await window.claude.complete(promptText, { history: hist.slice(0, -1), quote: qv || undefined }); } catch (e) { reply = ''; }
+    try { reply = await window.claude.complete(promptText, {
+      history: hist.slice(0, -1), quote: qv || undefined, kind: qbookInfo ? 'book' : 'music',
+      nowReading: qbookInfo ? { id: qbookInfo.id, title: qbookInfo.title, block_idx: qbookInfo.block_idx, quote: qv || '' } : undefined,
+    }); } catch (e) { reply = ''; }
     reply = String(reply || '');
     const responseMeta = window.__lsLastResponseMeta || null;
     try { window.__lsLastResponseMeta = null; } catch (e) {}
@@ -1036,7 +1050,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
     const isStream = (function () { try { return localStorage.getItem('ls-room-replymode') === 'stream'; } catch (e) { return false; } })();
     // 分气泡模式按换行拆条；完整模式整段一条、带思考链
     const parts = isStream ? (shown ? [shown] : []) : shown.split(/\n+/).map(x => x.trim()).filter(Boolean);
-    const aiMsgs = (parts.length ? parts : ['（放好了，一起听）']).map(t2 => ({ who: 'yu', t: t2, time: lsNow(), ts: Date.now() }));
+    const aiMsgs = (parts.length ? parts : [qbookInfo ? '（我在这一页陪你。）' : '（放好了，一起听）']).map(t2 => ({ who: 'yu', t: t2, time: lsNow(), ts: Date.now() }));
     if (isStream && think && aiMsgs.length) aiMsgs[0].think = think;
     if (responseMeta && aiMsgs.length) {
       const last = aiMsgs[aiMsgs.length - 1];
@@ -1179,7 +1193,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
               {!self && !hideAvas && (firstOfRun ? <div className="lsr-ava"><LSFace who="yu" /></div> : <div className="lsr-ava ghost"></div>)}
               <div className="lsr-col">
                 {m.think ? <details className="lsr-think"><summary>💭 思考过程</summary><div className="tk">{m.think}</div></details> : null}
-                {(m.t || m.quote) ? <div className="lsr-bubble">{m.quote ? <div className="lsr-bq"><span className="bq-src">♪ {m.qsong || '歌词'}</span>{m.quote}</div> : null}{m.t}</div> : null}
+              {(m.t || m.quote) ? <div className="lsr-bubble">{m.quote ? <div className="lsr-bq"><span className="bq-src">{m.qbook ? '▤ ' + m.qbook : '♪ ' + (m.qsong || '歌词')}</span>{m.quote}</div> : null}{m.t}</div> : null}
                 {m.share && (<div className="lsr-share" onClick={() => playSharedNcm(m.share)}><div className="cv"><LSCover cover={m.share.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{(self ? eveName : yuName) + ' · 分享'}</div><b>{m.share.title}</b><span>{m.share.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playSharedNcm(m.share); }}>{String(song.id) === String(m.share.id) && isPlaying ? <span className="eq2"><i></i><i></i><i></i></span> : LSIcon.play()}</button></div>)}
                 {s && (<div className="lsr-share" onClick={() => playShared(s)}><div className="cv"><LSCover cover={s.cover} shape="rounded" radius={10} size={120} /></div><div className="mn"><div className="eb">{(self ? eveName : yuName) + ' · 分享'}</div><b>{s.title}</b><span>{s.artist}</span></div><button className="pl" onClick={(e) => { e.stopPropagation(); playShared(s); }}>{LSIcon.play()}</button></div>)}
                 {(m.time || Number.isFinite(totalTokens) || m.t) ? <div className="lsr-meta">
@@ -1208,7 +1222,7 @@ function LSChatView({ tab, setTab, idx, setIdx, playing, setPlaying, ncmSong, nc
       {/* 展开面板贴着悬浮球弹出（js 计算位置防出屏），定位前隐藏避免闪跳 */}
       {ballOpen && <LSFullCenter song={song} cur={position} dur={dur} isPlaying={isPlaying} loved={lovedNow} ncmQueue={ncmQueue} ncmLyric={ncmLyric} playNcmIdx={playNcmIdx} doPlay={doPlay} doPause={doPause} doNext={doNext} doLove={doLove} playMode={playMode} doMode={doMode} onClose={() => setBallOpen(false)} onQuote={(line) => { setLyrQuote(line); setLyrQuoteSong((song && song.title) || ''); setBallOpen(false); }} defaultTab={ballStyle === 'island' ? 'queue' : 'lyrics'} posStyle={fcPos ? { left: fcPos.left + 'px', top: fcPos.top + 'px', right: 'auto', bottom: 'auto', margin: 0 } : { visibility: 'hidden' }} />}
 
-      {lyrQuote ? <div className="lsr-quotebar"><span>❝ {lyrQuote}</span><button onClick={() => { setLyrQuote(''); setLyrQuoteSong(''); }}>×</button></div> : null}
+      {lyrQuote ? <div className="lsr-quotebar"><span>{bookQuote ? ('▤ ' + (bookQuote.title || '书页') + ' · ') : '❝ '}{lyrQuote}</span><button onClick={() => { setLyrQuote(''); setLyrQuoteSong(''); setBookQuote(null); }}>×</button></div> : null}
       <div className="ls-input">
         <div className="box"><input value={draft} onChange={e => setDraft(e.target.value)} onKeyDown={e => e.key === 'Enter' && send()} placeholder="边听边说…" /><button className="send" onClick={send}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg></button></div>
       </div>

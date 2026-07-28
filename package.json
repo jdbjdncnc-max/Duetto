@@ -8,10 +8,11 @@
   },
   "scripts": {
     "start": "node server/index.mjs",
-    "test": "node scripts/test-context-auth.mjs"
+    "test": "node scripts/test-context-auth.mjs && node scripts/test-books.mjs"
   },
   "dependencies": {
     "express": "^5.2.1",
+    "fflate": "^0.8.2",
     "NeteaseCloudMusicApi": "^4.32.0",
     "ws": "^8.21.0"
   },

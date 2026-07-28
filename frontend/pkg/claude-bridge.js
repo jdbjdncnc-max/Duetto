@@ -34,9 +34,10 @@
     try{var ma=(mm.analysis||{});if(ma.endpoint)ai.a_base=ma.endpoint;if(ma.key)ai.a_key=ma.key;if(ma.name)ai.a_model=ma.name;}catch(e){}
     return ai;
   }
-  function fetchComplete(prompt, ai, np, history){
-    var body={kind:'music',prompt:String(prompt||''),ai:ai};
-    if(np)body.nowPlaying=np;
+  function fetchComplete(prompt, ai, np, history, kind, nr){
+    var body={kind:kind||'music',prompt:String(prompt||''),ai:ai};
+    if(kind==='book'&&nr)body.nowReading=nr;
+    else if(np)body.nowPlaying=np;
     if(history)body.history=history;
     return fetch(API+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json();})
@@ -46,7 +47,9 @@
   function complete(prompt, opts){
     try{window.__lsLastResponseMeta=null;}catch(e){}
     var ai=aiConfig();
-    var np=nowPlaying(opts);
+    var kind=(opts&&opts.kind)==='book'?'book':'music';
+    var nr=kind==='book'&&opts&&opts.nowReading?opts.nowReading:null;
+    var np=kind==='book'?null:nowPlaying(opts);
     var history=historyOf(opts);
     // WS 通道只转发 prompt+ai：把上下文一并挂进 ai，后端 WS 处理器会读取
     if(opts&&opts.noNote)ai.no_note=1;
@@ -54,11 +57,13 @@
     if(window.__LS_SYNC&&window.__LS_SYNC.aiSend){
       var wsAi={};
       for(var k in ai)wsAi[k]=ai[k];
-      if(np)wsAi.nowPlaying=np;
+      wsAi.kind=kind;
+      if(kind==='book'&&nr)wsAi.nowReading=nr;
+      else if(np)wsAi.nowPlaying=np;
       if(history)wsAi.history=history;
-      return window.__LS_SYNC.aiSend(String(prompt||''), wsAi).then(function(reply){ return (reply!=null)?reply:fetchComplete(prompt, ai, np, history); });
+      return window.__LS_SYNC.aiSend(String(prompt||''), wsAi).then(function(reply){ return (reply!=null)?reply:fetchComplete(prompt, ai, np, history, kind, nr); });
     }
-    return fetchComplete(prompt, ai, np, history);
+    return fetchComplete(prompt, ai, np, history, kind, nr);
   }
   window.claude={ complete: complete, ask: complete };
   window.__lsAiConfig=aiConfig;

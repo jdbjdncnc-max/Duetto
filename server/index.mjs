@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import { DatabaseSync } from 'node:sqlite';
 import dns from 'dns';
 import net from 'net';
+import { createBookService } from './books.mjs';
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const dataDir = process.env.DUETTO_DATA_DIR || path.join(rootDir, 'data');
 const settingsFile = path.join(dataDir, 'settings.json');
@@ -147,17 +148,22 @@ async function fetchCapped(urlStr, { maxBytes=100*1024*1024, timeoutMs=90000, he
     return { buf:Buffer.concat(chunks), ct, finalUrl };
   } finally { clearTimeout(t); }
 }
+const bookService = createBookService({ db, dataDir, assertPublicUrl, fetchCapped });
+bookService.register(app);
 function timeBucket(h){ if(h<5)return '深夜'; if(h<9)return '清晨'; if(h<12)return '上午'; if(h<14)return '午间'; if(h<18)return '下午'; if(h<23)return '晚上'; return '深夜'; }
 // 外部记忆接口（可选）：settings.ai.context_url 指向部署者自己的记忆/召回服务，
 // 每次对话 POST {message, song, user, ai}，把返回的 {context} 文本注入提示词——新用户接自己的记忆体系用
-async function fetchContext(s, prompt, np){
+async function fetchContext(s, prompt, np, kind='music'){
   const u = s.ai && s.ai.context_url; if (!u || !/^https:/.test(String(u))) return '';
   try {
     await assertPublicUrl(String(u));
     const headers={'Content-Type':'application/json'};
     const contextKey=String((s.ai&&s.ai.context_key)||'').trim();
     if(contextKey)headers.Authorization='Bearer '+contextKey;
-    const rr = await fetchT(String(u), { method:'POST', headers, body: JSON.stringify({ message:String(prompt||''), song: np?{id:np.id,title:np.title,artist:np.artist}:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') }) }, 4000);
+    const ref = np ? (kind==='book'
+      ? { id:np.id,title:np.title,author:np.author||'',chapter:np.chapter||0,chapter_title:np.chapter_title||'',block_idx:np.block_idx||0 }
+      : { id:np.id,title:np.title,artist:np.artist }) : null;
+    const rr = await fetchT(String(u), { method:'POST', headers, body: JSON.stringify({ message:String(prompt||''), kind, song:kind==='music'?ref:null, book:kind==='book'?ref:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') }) }, 4000);
     if (!rr.ok) return '';
     const d = await rr.json().catch(()=>null);
     return String((d && (d.context || d.text || d.memory)) || '').slice(0, 4000);
@@ -165,13 +171,26 @@ async function fetchContext(s, prompt, np){
 }
 function sysPrompt(s,kind,np,ctx){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌'; const stream=s.ai.reply_mode==='stream';
  // 稳定前缀在前（persona/身份/格式/DJ 指令），会变的时间与"正在播"放最后 —— 中转的前缀缓存才能命中
- const ident='你叫'+who+'，正在和'+partner+scene+'。'+(kind==='book'?'':'你们正窝在一起听歌。就像平时那样自然地陪伴和回应，别端着、别解释自己、别写系统说明。专注音乐、歌词、'+partner+'此刻的心情、你们一起听歌的记忆；别主动扯无关的日常。下面给你的正在播和记忆只当背景，别复述。');
+ const ident='你叫'+who+'，正在和'+partner+scene+'。'+(kind==='book'
+   ? '你们在同一个房间里读同一本书。像真正坐在她身边那样，专注文本的语言、人物、线索和她此刻的反应；可以温柔地追问、联想和提出不同理解，但别端着讲课、别编造窗口之外的情节。下面的正文窗口、批注与记忆只当背景，别整段复述。'
+   : '你们正窝在一起听歌。就像平时那样自然地陪伴和回应，别端着、别解释自己、别写系统说明。专注音乐、歌词、'+partner+'此刻的心情、你们一起听歌的记忆；别主动扯无关的日常。下面给你的正在播和记忆只当背景，别复述。');
  const fmt=(stream?'（回复格式，无论上面的对话历史长什么样，从这一条起严格按此执行）你的每条回复都必须以 <thinking> 开头：先在 <thinking>...</thinking> 里写下你此刻真实的内心活动（'+partner+'看得见），闭合标签后紧接着写正文——一条完整的回复，自然的对话节奏，可以包含动作、心理、对白，不需要微信式短消息拆段；不返回 JSON 数组、不返回 markdown 代码块，直接纯文本。':'用自然的口语回复；不要分点、不要标签、不要解释你的格式。不要用星号或任何 markdown 符号包裹文字。你的整个回复输出成一个 JSON 数组，每个元素是一条独立的聊天气泡，像在聊天软件里连着发消息那样：["第一条","第二条"]。通常 1-4 条，每条一两句话；只输出这个数组本身，别的什么都不要。')+'回复里永远用第一人称「我」指代自己、用第二人称「你」指代'+partner+'，不要用第三人称称呼对方。';
- const dj=stream?'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，在回复的最后单独一行输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"）。分享一首歌用 {"type":"share","query":"歌名 歌手"}，分享当前这首 {"type":"share"}；红心 {"type":"like"}；加队列 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。':'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。给正在放的这首点红心用 {"type":"like"}；想把一首歌加进播放队列、不打断当前播放，用 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。';
+ const dj=kind==='book'
+   ? '这是阅读陪伴，不要输出播放器动作指令。引用原文时只引用给出的正文窗口；如果不确定后文，就坦白说只根据眼前这段来读。'
+   : (stream?'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，在回复的最后单独一行输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"）。分享一首歌用 {"type":"share","query":"歌名 歌手"}，分享当前这首 {"type":"share"}；红心 {"type":"like"}；加队列 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。':'你可以控制播放器。当你想放某首歌/切歌/暂停/继续时，把这个指令作为数组的最后一个元素单独输出：<<ACT>>{"type":"play","query":"歌名 歌手"}<<>>（play 需要 query；下一首用 type:"next"、上一首 "prev"、暂停 "pause"、继续 "resume"，这些不需要 query）。想把一首歌推荐给对方但不打断当前播放时，同样作为数组最后一个元素输出：<<ACT>>{"type":"share","query":"歌名 歌手"}<<>>；分享当前正在放的这首用 {"type":"share"}（不带 query），会在房间里弹出分享卡片。给正在放的这首点红心用 {"type":"like"}；想把一首歌加进播放队列、不打断当前播放，用 {"type":"queue","query":"歌名 歌手"}。正常聊天时不要输出 ACT，也不要解释这个格式。');
  let timeLine='';
  if(s.ai.time_aware!==false&&String(s.ai.time_aware)!=='false'){ try{ const now=new Date(); const cn=now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'}); const h=Number(now.toLocaleString('zh-CN',{timeZone:'Asia/Shanghai',hour12:false,hour:'2-digit'})); timeLine='现在是'+cn+'（'+timeBucket(h)+'）。'; }catch(e){} }
  let nowLine='';
- if(np&&np.title){
+ if(np&&np.title&&kind==='book'){
+   nowLine='现在正在一起读：《'+np.title+'》'+(np.author?('—'+np.author):'')
+     +(np.chapter_title?(' · '+np.chapter_title):'')+' · 正文块 '+Number(np.block_idx||0)+'。';
+   if(np.quote) nowLine+='\n'+partner+'刚划线：「'+String(np.quote).slice(0,1000)+'」';
+   if(np.digest) nowLine+='\n[全书梗概 · 只当背景]\n'+String(np.digest).slice(0,300);
+   if(np.chap_summary) nowLine+='\n[本章摘要 · 只当背景]\n'+String(np.chap_summary).slice(0,500);
+   if(np.impression) nowLine+='\n[你们读这本书留下的回忆]\n'+String(np.impression).slice(0,500);
+   if(np.notes&&np.notes.length) nowLine+='\n[附近最近的批注]\n'+np.notes.map(n=>'- ['+n.block_idx+'] '+(n.passage?('「'+n.passage+'」 '):'')+(n.author==='yu'?'我写：':partner+'写：')+String(n.text||'').slice(0,180)).join('\n');
+   if(np.window) nowLine+='\n[此刻可见的正文窗口 · 方括号数字是稳定块编号]\n'+String(np.window).slice(0,3600);
+ } else if(np&&np.title){
    nowLine='现在正在一起听：《'+np.title+'》'+(np.artist?('—'+np.artist):'')
      +((np.pos!=null&&np.dur)?(' · 进度 '+fmtSec(np.pos)+'/'+fmtSec(np.dur)):'')
      +((np.plays>1)?(' · 你们一起听过 '+np.plays+' 次'):'')+'。自然地结合它来回应。';
@@ -378,7 +397,7 @@ async function callLLMResult(s,messages,over){
   };
 }
 async function callLLM(s,messages,over){ return (await callLLMResult(s,messages,over)).text; }
-app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null}=q.body||{}; const np=nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null; const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,120); await enrichNp(s,np); } const ctx=await fetchContext(s, prompt, np); const result=await callLLMResult(s,[{role:'system',content:sysPrompt(s,kind,np,ctx)},...past,{role:'user',content:String(prompt)}]); const raw=result.text; let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think,model:result.model,usage:result.usage}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null,nowReading=null}=q.body||{}; const np=kind==='book'?(nowReading||(bb.ai&&bb.ai.nowReading)||null):(nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null); const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,1200); if(kind==='book') bookService.enrichReading(np); else await enrichNp(s,np); } const ctx=await fetchContext(s, prompt, np, kind); const result=await callLLMResult(s,[{role:'system',content:sysPrompt(s,kind,np,ctx)},...past,{role:'user',content:String(prompt)}]); const raw=result.text; let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(kind!=='book'&&!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think,model:result.model,usage:result.usage}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— Song analysis: cached per song id so each song is analyzed once ——
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
 function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
@@ -477,15 +496,16 @@ wss.on('connection', (sock, req) => {
         const ai = m.ai ? mergeAi(s0.ai, m.ai) : s0.ai;
         if (!ai.api_key) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI not set up: add your endpoint + key in Settings or the Model tab]' })); return; }
         const eff = { ...s0, ai };
-        const np = m.nowPlaying || (m.ai && m.ai.nowPlaying) || null;
+        const kind2 = (m.kind === 'book' || (m.ai && m.ai.kind === 'book')) ? 'book' : 'music';
+        const np = kind2 === 'book' ? (m.nowReading || (m.ai && m.ai.nowReading) || null) : (m.nowPlaying || (m.ai && m.ai.nowPlaying) || null);
         const hist = m.history || (m.ai && m.ai.history) || [];
         const past = Array.isArray(hist) ? hist.slice(-12).filter(x=>x&&x.role&&typeof x.content==='string') : [];
-        if (np) { if (m.ai && m.ai.quote) np.quote = String(m.ai.quote).slice(0,120); await enrichNp(eff, np); }
-        const ctx2 = await fetchContext(eff, m.prompt, np);
-        const result2 = await callLLMResult(eff, [{ role:'system', content: sysPrompt(eff, 'music', np, ctx2) }, ...past, { role:'user', content: String(m.prompt||'') }]);
+        if (np) { if (m.ai && m.ai.quote) np.quote = String(m.ai.quote).slice(0,1200); if(kind2==='book') bookService.enrichReading(np); else await enrichNp(eff, np); }
+        const ctx2 = await fetchContext(eff, m.prompt, np, kind2);
+        const result2 = await callLLMResult(eff, [{ role:'system', content: sysPrompt(eff, kind2, np, ctx2) }, ...past, { role:'user', content: String(m.prompt||'') }]);
         const raw2 = result2.text;
         let reply, think2=''; if (eff.ai.reply_mode==='stream') { const st=stripThinking(raw2); reply=st.text; think2=st.think; } else { reply=deStar(parseReplies(raw2)).join('\n'); }
-        if (!(m.ai && m.ai.no_note)) logRoomNote(eff, np, m.prompt, reply);
+        if (kind2!=='book' && !(m.ai && m.ai.no_note)) logRoomNote(eff, np, m.prompt, reply);
         sock.send(JSON.stringify({ t:'ai', id:m.id, reply, think: think2, model:result2.model, usage:result2.usage }));
       } catch(e) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI error: '+e.message+']' })); }
       return;
