@@ -53,4 +53,58 @@ assert.equal(redacted.ai.context_key, '');
 assert.equal(redacted.ai.has_context_key, true);
 assert.equal(redacted.ai.context_key_hint, '****cret');
 
+const envSandbox = { process: { env: {} } };
+vm.createContext(envSandbox);
+vm.runInContext(
+  `${sourceBetween('function envValue', 'function getStoredSettings')}globalThis.applyAiEnvUnderTest = applyAiEnv; globalThis.stripEnvManagedAiSecretsUnderTest = stripEnvManagedAiSecrets;`,
+  envSandbox,
+);
+const envConfigured = {
+  DUETTO_CHAT_BASE_URL: 'https://ombre.example/v1',
+  DUETTO_CHAT_API_KEY: 'gateway-secret',
+  DUETTO_CHAT_MODEL: 'zeta-gateway',
+  DUETTO_ANALYSIS_BASE_URL: 'https://openrouter.ai/api/v1',
+  DUETTO_ANALYSIS_API_KEY: 'analysis-secret',
+  DUETTO_ANALYSIS_MODEL: 'google/gemini-2.5-flash',
+};
+const envAi = envSandbox.applyAiEnvUnderTest({ api_key: 'file-secret' }, envConfigured);
+assert.equal(envAi.base_url, 'https://ombre.example/v1');
+assert.equal(envAi.api_key, 'gateway-secret');
+assert.equal(envAi.a_key, 'analysis-secret');
+assert.equal(envAi.a_model, 'google/gemini-2.5-flash');
+const persistedAi = envSandbox.stripEnvManagedAiSecretsUnderTest(envAi, envConfigured);
+assert.equal(Object.hasOwn(persistedAi, 'api_key'), false);
+assert.equal(Object.hasOwn(persistedAi, 'a_key'), false);
+assert.equal(envAi.api_key, 'gateway-secret');
+
+const promptSandbox = {
+  fmtSec: (seconds) => String(seconds),
+  timeBucket: () => '测试时段',
+};
+vm.createContext(promptSandbox);
+vm.runInContext(
+  `${sourceBetween('function sysPrompt', '// —— 在场记录')}globalThis.sysPromptUnderTest = sysPrompt;`,
+  promptSandbox,
+);
+const scenePrompt = promptSandbox.sysPromptUnderTest(
+  {
+    ai_name: 'Zeta',
+    user_name: 'Eve',
+    ai: {
+      ai_name: 'Zeta',
+      user_name: 'Eve',
+      persona: 'SHOULD_NOT_APPEAR_PERSONA',
+      style: 'SHOULD_NOT_APPEAR_STYLE',
+      time_aware: false,
+    },
+  },
+  'music',
+  { title: 'Test Song', artist: 'Test Artist' },
+  '',
+);
+assert.equal(scenePrompt.includes('SHOULD_NOT_APPEAR_PERSONA'), false);
+assert.equal(scenePrompt.includes('SHOULD_NOT_APPEAR_STYLE'), false);
+assert.equal(scenePrompt.includes('<<ACT>>'), true);
+assert.equal(scenePrompt.includes('Test Song'), true);
+
 console.log('context auth tests passed');

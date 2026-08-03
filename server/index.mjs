@@ -14,8 +14,37 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const dataDir = process.env.DUETTO_DATA_DIR || path.join(rootDir, 'data');
 const settingsFile = path.join(dataDir, 'settings.json');
 const PORT = Number(process.env.PORT || 4183);
-const DEFAULTS = { user_name:'You', ai_name:'DJ', room_name:'Our Room', room_sub:'', ai:{base_url:'',api_key:'',model:'',persona:'',context_url:'',context_key:''}, show_gallery:true, avatar_url:'', ai_avatar_url:'', background_url:'', theme:'' };
-function getSettings(){ try{ const r=JSON.parse(fs.readFileSync(settingsFile,'utf8')); return {...DEFAULTS,...r,ai:{...DEFAULTS.ai,...(r.ai||{})}}; }catch(e){ return {...DEFAULTS}; } }
+const DEFAULTS = { user_name:'You', ai_name:'DJ', room_name:'Our Room', room_sub:'', ai:{base_url:'',api_key:'',model:'',context_url:'',context_key:''}, show_gallery:true, avatar_url:'', ai_avatar_url:'', background_url:'', theme:'' };
+function envValue(env,name){ return String((env&&env[name])||'').trim(); }
+function applyAiEnv(ai,env=process.env){
+  const out={...(ai||{})};
+  const mapping={
+    DUETTO_CHAT_BASE_URL:'base_url',
+    DUETTO_CHAT_API_KEY:'api_key',
+    DUETTO_CHAT_MODEL:'model',
+    DUETTO_ANALYSIS_BASE_URL:'a_base',
+    DUETTO_ANALYSIS_API_KEY:'a_key',
+    DUETTO_ANALYSIS_MODEL:'a_model'
+  };
+  for(const [envName,key] of Object.entries(mapping)){ const value=envValue(env,envName); if(value)out[key]=value; }
+  return out;
+}
+function stripEnvManagedAiSecrets(ai,env=process.env){
+  const out={...(ai||{})};
+  if(envValue(env,'DUETTO_CHAT_API_KEY'))delete out.api_key;
+  if(envValue(env,'DUETTO_ANALYSIS_API_KEY'))delete out.a_key;
+  return out;
+}
+function getStoredSettings(){
+  try{
+    const r=JSON.parse(fs.readFileSync(settingsFile,'utf8'));
+    const settings={...DEFAULTS,...r,ai:{...DEFAULTS.ai,...(r.ai||{})}};
+    delete settings.ai.persona;
+    delete settings.ai.style;
+    return settings;
+  }catch(e){ return {...DEFAULTS,ai:{...DEFAULTS.ai}}; }
+}
+function getSettings(){ const settings=getStoredSettings(); return {...settings,ai:applyAiEnv(settings.ai)}; }
 function redactSettings(s){
   const out={...s,ai:{...(s&&s.ai||{})}};
   if(out.ai.api_key){ out.ai.has_key=true; out.ai.key_hint='****'+String(out.ai.api_key).slice(-4); out.ai.api_key=''; }
@@ -29,6 +58,17 @@ function redactSettings(s){
 function writePrivate(file, text){ const tmp=file+'.tmp'; fs.writeFileSync(tmp, text, { mode: 0o600 }); try{ fs.chmodSync(tmp, 0o600); }catch(e){} fs.renameSync(tmp, file); try{ fs.chmodSync(file, 0o600); }catch(e){} }
 // ═══ SQLite：长期档案（听歌流水/房间对话/歌曲分析/在场记录/印象）。JSON 只留瞬时状态（settings/cookie/封面缓存） ═══
 fs.mkdirSync(dataDir, { recursive: true });
+// 环境变量接管 Key 后，从旧 settings.json 自动移除同一份明文 Key。
+try{
+  const raw=JSON.parse(fs.readFileSync(settingsFile,'utf8'));
+  if(raw&&raw.ai&&typeof raw.ai==='object'){
+    const cleaned=stripEnvManagedAiSecrets(raw.ai);
+    if(JSON.stringify(cleaned)!==JSON.stringify(raw.ai)){
+      raw.ai=cleaned;
+      writePrivate(settingsFile,JSON.stringify(raw,null,2));
+    }
+  }
+}catch(e){}
 const dbFile = path.join(dataDir, 'listen.db');
 const db = new DatabaseSync(dbFile);
 try { fs.chmodSync(dbFile, 0o600); } catch(e) {}
@@ -77,7 +117,7 @@ app.get('/api/health',(_q,r)=>r.json({ok:true,mode:'self-host',version:'1.0.0'})
 app.get('/api/config',(_q,r)=>{ const s=getSettings(); r.json({ok:true,config:{companion:{name:s.ai_name,has_key:Boolean(s.ai.api_key),model:s.ai.model},user:{display_name:s.user_name},room:{title:s.room_name,subtitle:s.room_sub}}}); });
 app.get('/api/settings',(_q,r)=>{ r.json({ok:true,settings:redactSettings(getSettings())}); });
 app.post('/api/settings',(q,r)=>{ try{
-  const cur=getSettings();
+  const cur=getStoredSettings();
   const b=q.body||{};
   const bai={...(b.ai||{})};
   const hasOwn=(o,k)=>Object.prototype.hasOwnProperty.call(o,k);
@@ -101,12 +141,13 @@ app.post('/api/settings',(q,r)=>{ try{
   if(baseChanging&&!apiKeyProvided)next.ai.api_key='';
   if(aBaseChanging&&!aKeyProvided)next.ai.a_key='';
   if(contextUrlChanging&&!contextKeyProvided)next.ai.context_key='';
+  next.ai=stripEnvManagedAiSecrets(next.ai);
   fs.mkdirSync(dataDir,{recursive:true});
   writePrivate(settingsFile,JSON.stringify(next,null,2));
-  r.json({ok:true,settings:redactSettings(next)});
+  r.json({ok:true,settings:redactSettings({...next,ai:applyAiEnv(next.ai)})});
 }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
 app.post('/api/models',async(q,r)=>{ try{ const {base_url,api_key}=q.body||{}; if(!base_url)return r.status(400).json({ok:false,error:'base_url required'}); const base=String(base_url).replace(/\/+$/,''); if(!/^https:\/\//.test(base)) return r.status(400).json({ok:false,error:'base_url must be https'}); try{ await assertPublicUrl(base); }catch(e){ return r.status(400).json({ok:false,error:'endpoint not allowed'}); } const rr=await fetchT(base+'/models',{headers:api_key?{Authorization:'Bearer '+api_key}:{},redirect:'error'},15000); if(!rr.ok){return r.status(502).json({ok:false,error:'models endpoint returned '+rr.status});} const d=await rr.json(); const arr=Array.isArray(d)?d:(d.data||d.models||[]); r.json({ok:true,models:arr.map(m=>typeof m==='string'?m:(m.id||m.name||m.model||'')).filter(Boolean).sort((a,b)=>a.localeCompare(b,'zh-Hans-CN'))}); }catch(e){ r.status(500).json({ok:false,error:e.message}); } });
-function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object'){ for(const k of ['model','persona','style','ai_name','user_name','time_aware','reply_mode','a_model']){ const v=over[k]; if(v!==undefined&&v!==null&&v!=='')out[k]=v; } if(over.base_url&&over.api_key){ out.base_url=over.base_url; out.api_key=over.api_key; } if(over.a_base&&over.a_key){ out.a_base=over.a_base; out.a_key=over.a_key; } } return out; }
+function mergeAi(base,over){ const out={...base}; if(over&&typeof over==='object'){ for(const k of ['model','ai_name','user_name','time_aware','reply_mode','a_model']){ const v=over[k]; if(v!==undefined&&v!==null&&v!=='')out[k]=v; } if(!envValue(process.env,'DUETTO_CHAT_API_KEY')&&over.base_url&&over.api_key){ out.base_url=over.base_url; out.api_key=over.api_key; } if(!envValue(process.env,'DUETTO_ANALYSIS_API_KEY')&&over.a_base&&over.a_key){ out.a_base=over.a_base; out.a_key=over.a_key; } } return applyAiEnv(out); }
 // ═══ SSRF 防线：解析主机名，若任一 IP 落在私网/环回/链路本地段则拒绝 ═══
 function isPrivateIp(ip){
   if(!ip) return true;
@@ -170,7 +211,7 @@ async function fetchContext(s, prompt, np, kind='music'){
   } catch(e){ return ''; }
 }
 function sysPrompt(s,kind,np,ctx){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌'; const stream=s.ai.reply_mode==='stream';
- // 稳定前缀在前（persona/身份/格式/DJ 指令），会变的时间与"正在播"放最后 —— 中转的前缀缓存才能命中
+ // 完整人格由 Ombre 网关统一注入；这里仅追加 Duetto 的场景、格式和播放器指令。
  const ident='你叫'+who+'，正在和'+partner+scene+'。'+(kind==='book'
    ? '你们在同一个房间里读同一本书。像真正坐在她身边那样，专注文本的语言、人物、线索和她此刻的反应；可以温柔地追问、联想和提出不同理解，但别端着讲课、别编造窗口之外的情节。下面的正文窗口、批注与记忆只当背景，别整段复述。'
    : '你们正窝在一起听歌。就像平时那样自然地陪伴和回应，别端着、别解释自己、别写系统说明。专注音乐、歌词、'+partner+'此刻的心情、你们一起听歌的记忆；别主动扯无关的日常。下面给你的正在播和记忆只当背景，别复述。');
@@ -199,7 +240,7 @@ function sysPrompt(s,kind,np,ctx){ const who=s.ai.ai_name||s.ai_name||'DJ',partn
    if(np.impression) nowLine+='\n[这首歌的回忆 · 你们一起听它的印象总结]\n'+np.impression;
    if(np.notes&&np.notes.length) nowLine+='\n[这首歌最近的在场记录]\n'+np.notes.map(n=>'- '+(n.passage?('歌词「'+n.passage+'」'):'')+(n.thought?(' '+partner+'说：'+n.thought):'')+(n.reply?(' 你回：'+String(n.reply).slice(0,80)):'')).join('\n');
  }
- const styleLine=s.ai.style?('对话风格（用户设定，按这个方式说话）：'+s.ai.style):''; const ctxLine=ctx?('[你们的记忆 · 外部记忆系统提供，只当背景别复述]\n'+ctx):''; return [s.ai.persona,styleLine,ident,fmt,dj,ctxLine,timeLine,nowLine].filter(Boolean).join('\n\n'); }
+ const ctxLine=ctx?('[你们的记忆 · 外部记忆系统提供，只当背景别复述]\n'+ctx):''; return [ident,fmt,dj,ctxLine,timeLine,nowLine].filter(Boolean).join('\n\n'); }
 // —— 在场记录（问Ta 的问答挂歌落库）与"印象"（记录满 6 条滚动总结成回忆） ——
 function readNotes(sid, limit){ try { const rows = db.prepare('SELECT song_id AS id,title,artist,passage,thought,reply,ts FROM song_notes WHERE song_id=? ORDER BY ts DESC, rowid DESC' + (limit ? ' LIMIT ' + Number(limit) : '')).all(String(sid)); return rows.reverse(); } catch(e){ return []; } }
 function readImpression(sid){ try { const r = db.prepare("SELECT mem_summary AS text, mem_summary_n AS n, mem_summary_at AS ts FROM songs WHERE id=? AND mem_summary!=''").get(String(sid)); return r || null; } catch(e){ return null; } }
@@ -401,7 +442,7 @@ app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body|
 // —— Song analysis: cached per song id so each song is analyzed once ——
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
 function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
-app.post('/api/song-analysis',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s=(bb.ai&&bb.ai.api_key)?{...s0,ai:mergeAi(s0.ai,bb.ai)}:{...s0,ai:mergeAi(s0.ai,{ai_name:bb.ai&&bb.ai.ai_name,user_name:bb.ai&&bb.ai.user_name,persona:bb.ai&&bb.ai.persona,time_aware:bb.ai&&bb.ai.time_aware})}; if(!s.ai.api_key)return r.json({ok:true,text:''}); const {title='',artist=''}=bb; const sid=String(bb.id||''); if(sid){ const hit=readAnalysis(sid); if(hit) return r.json({ok:true,text:hit.text,cached:true}); } const lrc=String(bb.lrc||'').slice(0,6000); const lyrArr=Array.isArray(bb.lyrics)?bb.lyrics.map(l=>typeof l==='string'?l:(l&&(l.line||l.text))||'').filter(Boolean).join('\n'):''; const lyr=lrc||lyrArr; const text=parseReplies(await callLLM(s,[{role:'system',content:sysPrompt(s,'music',{title,artist})+'\n\n她刚放了这首歌，你认真听完了。写1-3句听后感，像随口说给她听的，温柔具体有质感；可以引用扎到你的那句歌词。歌词每行行首的[分:秒]是时间轴，只用来感受歌的推进，回复里不要出现时间戳。直接出正文，不要分点、不要标签、不要 JSON 数组。'},{role:'user',content:'歌：'+title+(artist?(' — '+artist):'')+(lyr?('\n完整歌词：\n'+lyr):'')}])).join('\n'); if(sid&&text) appendAnalysis({id:sid,title,artist,text,ts:Date.now()}); r.json({ok:true,text}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+app.post('/api/song-analysis',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s=(bb.ai&&bb.ai.api_key)?{...s0,ai:mergeAi(s0.ai,bb.ai)}:{...s0,ai:mergeAi(s0.ai,{ai_name:bb.ai&&bb.ai.ai_name,user_name:bb.ai&&bb.ai.user_name,time_aware:bb.ai&&bb.ai.time_aware})}; if(!s.ai.api_key)return r.json({ok:true,text:''}); const {title='',artist=''}=bb; const sid=String(bb.id||''); if(sid){ const hit=readAnalysis(sid); if(hit) return r.json({ok:true,text:hit.text,cached:true}); } const lrc=String(bb.lrc||'').slice(0,6000); const lyrArr=Array.isArray(bb.lyrics)?bb.lyrics.map(l=>typeof l==='string'?l:(l&&(l.line||l.text))||'').filter(Boolean).join('\n'):''; const lyr=lrc||lyrArr; const text=parseReplies(await callLLM(s,[{role:'system',content:sysPrompt(s,'music',{title,artist})+'\n\n她刚放了这首歌，你认真听完了。写1-3句听后感，像随口说给她听的，温柔具体有质感；可以引用扎到你的那句歌词。歌词每行行首的[分:秒]是时间轴，只用来感受歌的推进，回复里不要出现时间戳。直接出正文，不要分点、不要标签、不要 JSON 数组。'},{role:'user',content:'歌：'+title+(artist?(' — '+artist):'')+(lyr?('\n完整歌词：\n'+lyr):'')}])).join('\n'); if(sid&&text) appendAnalysis({id:sid,title,artist,text,ts:Date.now()}); r.json({ok:true,text}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— NetEase Cloud Music: real QR login ——
 const ncmCookieFile = path.join(dataDir, 'ncm-cookie.txt');
 let ncmCookie = '';

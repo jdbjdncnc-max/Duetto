@@ -158,8 +158,6 @@ function LSModelInline({ bump }) {
   const [aEndpoint, setAEndpoint] = f2UseState(a0.endpoint || '');
   const [aKey, setAKey] = f2UseState(a0.key || '');
   const [aShow, setAShow] = f2UseState(false);
-  const [persona, setPersona] = f2UseState(window.__lsStore.persona || '');
-  const [styleTxt, setStyleTxt] = f2UseState(window.__lsStore.style || '');
   const [userNick, setUserNick] = f2UseState((function(){try{return localStorage.getItem('ls-nick-user')||'';}catch(e){return '';}})());
   const [aiNick, setAiNick] = f2UseState((function(){try{return localStorage.getItem('ls-nick-ai')||'';}catch(e){return '';}})());
   const [state, setState] = f2UseState('idle');
@@ -204,8 +202,8 @@ function LSModelInline({ bump }) {
           chat: { name: cName, endpoint: cEndpoint, key: cKey },
           analysis: { name: aName, endpoint: aEndpoint, key: aKey }
         };
-        s.persona = persona;
-        s.style = styleTxt;
+        delete s.persona;
+        delete s.style;
         try { localStorage.setItem('ls-nick-user', userNick); localStorage.setItem('ls-nick-ai', aiNick); if (window.LS_PEOPLE) { window.LS_PEOPLE.eve.name = userNick || 'You'; window.LS_PEOPLE.yu.name = aiNick || 'AI'; } } catch (e) {}
         lsSaveStore(s); setState('ok'); bump && bump(); setTimeout(() => setState('idle'), 1600);
       } catch (e) { setState('err'); }
@@ -288,21 +286,14 @@ function LSModelInline({ bump }) {
       </div>
 
       <div className="ls-model-group">
-        <div className="ls-model-gh">AI 人设 / 提示词</div>
-        <div className="ls-fld"><label>AI 人设 / 提示词</label>
-          <textarea className="ls-persona-ta" rows={5} value={persona} onChange={e => setPersona(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', display: 'block', margin: 0, padding: '10px 14px', borderRadius: '12px', border: '1px solid var(--ls-line)', background: 'color-mix(in srgb, var(--ls-panel) 15%, #fff)', color: 'var(--ls-ink)', fontSize: '14px', fontFamily: 'var(--ls-meta)', lineHeight: '1.5', resize: 'vertical', minHeight: '96px' }}
-            placeholder="你是一个温柔的音乐伙伴，会根据心情推荐歌。想放歌时可以直接点歌。" /></div>
-        <div className="ls-fld"><label>对话风格</label>
-          <textarea rows={3} value={styleTxt} onChange={e => setStyleTxt(e.target.value)}
-            style={{ width: '100%', boxSizing: 'border-box', display: 'block', margin: 0, padding: '10px 14px', borderRadius: '12px', border: '1px solid var(--ls-line)', background: 'color-mix(in srgb, var(--ls-panel) 15%, #fff)', color: 'var(--ls-ink)', fontSize: '14px', fontFamily: 'var(--ls-meta)', lineHeight: '1.5', resize: 'vertical', minHeight: '64px' }}
-            placeholder="TA 说话的方式：比如 回复简短像聊微信、多用语气词、别用书面腔。留空用默认。" /></div>
+        <div className="ls-model-gh">AI 提示词</div>
+        <div className="ls-model-note">完整人格由 Ombre 网关统一提供；Duetto 这里只追加听歌、共读和播放器操作规则。</div>
       </div>
 
       <button className={'ls-save ' + state} onClick={save} disabled={state === 'saving'}>
         {state === 'idle' && '保存'}{state === 'saving' && '保存中…'}{state === 'ok' && '已保存 ✓'}{state === 'err' && '保存失败，重试'}
       </button>
-      <div className="ls-model-note">头像与 Key 只存在本地浏览器；陪聊模型用于一起听时 AI 回复，分析模型用于真听一遍歌。</div>
+      <div className="ls-model-note">头像与 Key 只存在本地浏览器；陪聊模型请连接 Ombre 网关，分析模型用于真听一遍歌。</div>
     </div>
   );
 }

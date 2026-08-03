@@ -13,7 +13,7 @@
     var h=(opts&&opts.history);
     return Array.isArray(h)?h:null;
   }
-  // 组装发给后端的 ai 对象：含部署者/用户人设 persona + 可选自定义端点密钥
+  // 完整人格由 Ombre 网关注入；这里只发送模型连接与 Duetto 场景所需信息
   function aiConfig(){
     var mm=(window.__lsStore&&window.__lsStore.model)||{};
     var m=mm.chat||mm;
@@ -23,9 +23,6 @@
       var mn=m.name||m.model||'';
       if(mn)ai.model=mn; // 空 model 不发：否则会覆盖服务端 settings 里的模型名，上游报 model name empty
     }
-    var persona=(window.__lsStore&&window.__lsStore.persona)||'';
-    if(persona)ai.persona=persona;
-    try{var st=(window.__lsStore&&window.__lsStore.style)||'';if(st)ai.style=st;}catch(e){}
     // 昵称与时间感知随每次请求带给后端（前端设置是唯一真相）
     try{var P=window.LS_PEOPLE;if(P){if(P.yu&&P.yu.name)ai.ai_name=P.yu.name;if(P.eve&&P.eve.name)ai.user_name=P.eve.name;}}catch(e){}
     try{ai.time_aware=localStorage.getItem('ls-room-timeaware')!=='0';}catch(e){}

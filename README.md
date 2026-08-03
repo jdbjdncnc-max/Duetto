@@ -44,14 +44,25 @@ for a private room and share that link. Playback syncs in real time across the r
 
 ## Configure your AI
 
-Open the **Together** tab (bottom nav) → **Model settings** → fill in your OpenAI-compatible
-**endpoint** + **API key** → hit **Pull models** and pick one → optionally write a **persona**
-and a **chat style** → Save. Keys entered in the UI live in your browser's localStorage and are
-only sent to your own server, which forwards them to your endpoint.
+For hosted deployments, keep keys out of `data/settings.json` and configure them as environment
+variables. Environment values take priority over file/request values:
 
-You can also set a server-wide default in `data/settings.json` (`ai.base_url` / `ai.api_key` /
-`ai.model` / `ai.style`). The stored key is never returned by the API — `GET /api/settings` masks
-it — and `data/` is gitignored, so nothing private ships with the repo.
+```text
+DUETTO_CHAT_BASE_URL=https://your-ombre.example/v1
+DUETTO_CHAT_API_KEY=your-ombre-gateway-token
+DUETTO_CHAT_MODEL=zeta-gateway
+DUETTO_ANALYSIS_BASE_URL=https://openrouter.ai/api/v1
+DUETTO_ANALYSIS_API_KEY=your-openrouter-key
+DUETTO_ANALYSIS_MODEL=google/gemini-2.5-flash
+```
+
+When either Key environment variable is configured, Duetto automatically removes that same
+plaintext Key from an existing `data/settings.json` at startup and never writes it back through
+`POST /api/settings`. The JSON file may still hold non-secret defaults such as `ai.base_url`,
+`ai.model`, `ai.a_base`, and `ai.a_model`.
+
+The companion's complete persona comes from the Ombre gateway. Duetto only adds its music,
+co-reading, response-format, and player-action scene patch; `persona` and `style` are ignored.
 
 **Analysis model (optional).** The second block in Model settings picks the model used to *listen
 to* songs (audio in) and write impressions. Fill in as much or as little as you like — just a model
@@ -62,7 +73,8 @@ Leave it empty to use the chat model. Server-side defaults: `ai.a_model` / `ai.a
 your own. Each chat turn Duetto sends `{message, song, user, ai}` and injects the returned
 `{context}` text into the prompt as shared memory. Set `ai.context_key` to send it as an
 `Authorization: Bearer ...` header. The key is masked by `GET /api/settings`, just like the model
-keys. 4-second budget; failures are silent.
+keys. 4-second budget; failures are silent. Leave it empty when the chat endpoint is the Ombre
+gateway, because that gateway already performs memory recall.
 
 ## How it works
 
@@ -116,8 +128,8 @@ depth. All music-account actions and room/archive reads sit behind the PIN gate.
 ## Privacy
 
 No keys, personal data, playlists, or chat logs ship with this project. `data/` is gitignored. Runtime
-data stays on the deployment host under `data/`; model keys entered in the UI are stored in that
-browser's localStorage and are sent to the self-hosted backend only when making model requests.
+data stays on the deployment host under `data/`; hosted deployments should keep model keys in the
+platform's secret environment variables.
 
 ## License
 
