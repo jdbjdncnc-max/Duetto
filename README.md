@@ -100,6 +100,13 @@ existing database keeps working. Frontend assets are cache-busted by version, so
 
 Point your proxy at the server (default 4183), serve at your domain root, and **proxy `/ws`** for sync.
 
+## Embed inside Ombre
+
+Ombre opens Duetto inside its own app/WebView instead of launching an external browser. Configure
+Ombre with the normal Duetto page URL; Ombre automatically appends `embed=ombre` and its current
+theme color. Embedded mode removes Duetto's duplicate outer header and model-settings panel, keeps
+the player navigation, and reports readiness to the parent page through `postMessage`.
+
 ## Security note
 
 Duetto ships a built-in **PIN gate** (see the Security section above): on first open you set a PIN,

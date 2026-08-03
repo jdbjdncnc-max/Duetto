@@ -538,7 +538,7 @@ function LSApp() {
         {view === 'together' && (
           <div className="ls-together">
             <div className="ls-seg ls-tog-seg">
-              {[['archive', '听歌档案'], ['model', '身份与模型']].map(([k, l]) => (
+              {(window.__OMBRE_EMBED ? [['archive', '听歌档案']] : [['archive', '听歌档案'], ['model', '身份与模型']]).map(([k, l]) => (
                 <button key={k} className={togetherTab === k ? 'on' : ''} onClick={() => setTogetherTab(k)}>{l}</button>
               ))}
             </div>
