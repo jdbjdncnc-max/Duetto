@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import http from 'http';
 import { WebSocketServer } from 'ws';
 import fs from 'fs';
@@ -92,6 +93,7 @@ try {
   db.exec("UPDATE songs SET mem_summary=COALESCE((SELECT text FROM song_impressions WHERE song_id=songs.id ORDER BY ts DESC LIMIT 1),''), mem_summary_n=COALESCE((SELECT MAX(n) FROM song_impressions WHERE song_id=songs.id),0) WHERE mem_summary=''");
 } catch(e){ console.log('[songs backfill]', e.message); }
 const app=express();
+app.use(compression({ threshold: 1024 }));
 app.use(express.json({limit:'2mb'}));
 // ═══ 应用级门禁：首次打开设 PIN，之后所有 /api/* 与 /ws 需要 token（网易云登录只是登网易账号，这道门才是应用自己的锁） ═══
 const authFile = path.join(dataDir, 'auth.json');
@@ -519,7 +521,16 @@ app.get('/api/listen-stats',async(q,r)=>{
   } catch(e) { r.status(500).json({ ok: false, error: e.message }); }
 });
 
-app.use(express.static(path.join(rootDir,'frontend'), { setHeaders: (res, fp) => { if (/\.(html|webmanifest)$/.test(fp)) res.setHeader('Cache-Control', 'no-cache, must-revalidate'); } }));
+app.use(express.static(path.join(rootDir,'frontend'), {
+  etag: true,
+  setHeaders: (res, fp) => {
+    if (/\.(html|webmanifest)$/i.test(fp)) {
+      res.setHeader('Cache-Control', 'no-cache, must-revalidate');
+    } else {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+    }
+  }
+}));
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 512 * 1024 });
 const rooms = new Map();

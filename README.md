@@ -78,7 +78,7 @@ gateway, because that gateway already performs memory recall.
 
 ## How it works
 
-- **Frontend** (`frontend/pkg/`): React 18 with JSX precompiled by `npm run build:frontend`, `sync.js`
+- **Frontend** (`frontend/pkg/`): React 18 with JSX and browser runtime files combined by `npm run build:frontend`
   (real-time room sync), `claude-bridge.js` (AI plumbing), `image-slot.js` (local images via IndexedDB).
   `npm install` rebuilds the browser bundle automatically; after editing a `.jsx` file locally, run
   `npm run build:frontend` before testing or committing.
