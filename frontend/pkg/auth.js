@@ -19,7 +19,7 @@
     if (el && el.parentNode) el.parentNode.removeChild(el);
     var setup = mode === 'setup';
     el = document.createElement('div');
-    el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#eceae6;font-family:system-ui,-apple-system,"Noto Serif SC",serif;';
+    el.style.cssText = 'position:fixed;inset:0;z-index:99999;display:flex;align-items:center;justify-content:center;background:#eceae6;font-family:"Duetto Segoe Script","Caveat","Songti SC","STSong","Noto Serif CJK SC","Noto Serif SC","SimSun",serif;';
     el.innerHTML = '<div style="width:min(320px,86vw);background:#fff;border-radius:22px;padding:30px 26px;box-shadow:0 18px 50px rgba(0,0,0,.12);text-align:center">'
       + '<div style="font-size:22px;font-weight:700;letter-spacing:.06em;margin-bottom:6px">Duetto</div>'
       + '<div style="font-size:13px;color:#8b8680;margin-bottom:20px">' + (setup ? '给你们的 Duetto 设一道门禁 PIN（至少 4 位）' : '输入门禁 PIN') + '</div>'

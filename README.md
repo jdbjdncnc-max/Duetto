@@ -78,8 +78,10 @@ gateway, because that gateway already performs memory recall.
 
 ## How it works
 
-- **Frontend** (`frontend/pkg/`): React 18 + Babel standalone (no build step), `sync.js`
+- **Frontend** (`frontend/pkg/`): React 18 with JSX precompiled by `npm run build:frontend`, `sync.js`
   (real-time room sync), `claude-bridge.js` (AI plumbing), `image-slot.js` (local images via IndexedDB).
+  `npm install` rebuilds the browser bundle automatically; after editing a `.jsx` file locally, run
+  `npm run build:frontend` before testing or committing.
 - **Backend** (`server/index.mjs`): Express + WebSocket, zero database dependencies — the long-term
   archive (plays, songs with cached lyrics and rolling memories, presence notes, analyses, room
   events) lives in SQLite via Node's built-in `node:sqlite`; JSON files hold only ephemeral state.

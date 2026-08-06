@@ -9,12 +9,31 @@ input, textarea { font: inherit; color: inherit; }
 ::selection { background: color-mix(in srgb, var(--ls-gold, #d4b15c) 30%, transparent); }
 
 /* ── 字体令牌 ─────────────────────────────────────────── */
+/* Segoe Script is a Windows system font and cannot be redistributed.
+   Limit it to Latin characters so Chinese always falls through to Songti. */
+@font-face {
+  font-family: 'Duetto Segoe Script';
+  src: local('Segoe Script'), local('SegoeScript');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F;
+}
+@font-face {
+  font-family: 'Duetto Segoe Script';
+  src: local('Segoe Script Bold'), local('Segoe Script'), local('SegoeScript');
+  font-style: normal;
+  font-weight: 500 700;
+  font-display: swap;
+  unicode-range: U+0000-024F, U+1E00-1EFF, U+2000-206F;
+}
 :root {
-  --ls-serif: 'EB Garamond', 'Songti SC', 'Noto Serif SC', 'STSong', serif;
-  --ls-serif-d: 'Cormorant Garamond', 'EB Garamond', 'Songti SC', 'Noto Serif SC', 'STSong', serif;
-  --ls-cn: 'Songti SC', 'Noto Serif SC', 'STSong', 'SimSun', serif;
-  --ls-meta:    'JetBrains Mono', 'Geist Mono', monospace;
-  --ls-hand:    'Caveat', 'Ma Shan Zheng', cursive;
+  --ls-cn: 'Songti SC', 'STSong', 'Noto Serif CJK SC', 'Noto Serif SC', 'SimSun', serif;
+  --ls-script: 'Duetto Segoe Script', 'Segoe Script', 'Segoe Print', 'Bradley Hand', cursive;
+  --ls-serif: var(--ls-script), var(--ls-cn);
+  --ls-serif-d: var(--ls-script), var(--ls-cn);
+  --ls-meta: var(--ls-script), var(--ls-cn);
+  --ls-hand: var(--ls-script), var(--ls-cn);
 }
 
 /* ════════════ 四套皮肤 ════════════ */
@@ -1440,10 +1459,6 @@ html.ombre-embed .ls-app {
   min-height: 0;
   --ls-gold: var(--ombre-accent, #17a897) !important;
   --ls-eve: color-mix(in srgb, var(--ombre-accent, #17a897) 62%, #ffffff) !important;
-  --ls-cn: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  --ls-serif: var(--ls-cn);
-  --ls-serif-d: var(--ls-cn);
-  --ls-meta: var(--ls-cn);
   background: linear-gradient(180deg, rgba(246, 251, 247, 0.86), rgba(238, 247, 244, 0.72));
 }
 
