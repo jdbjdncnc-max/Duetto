@@ -10,7 +10,7 @@
     "build:frontend": "node scripts/build-frontend.mjs",
     "postinstall": "npm run build:frontend",
     "start": "node server/index.mjs",
-    "test": "node scripts/test-context-auth.mjs && node scripts/test-books.mjs"
+    "test": "node scripts/test-context-auth.mjs && node scripts/test-books.mjs && node scripts/test-ombre-events.mjs"
   },
   "dependencies": {
     "compression": "^1.8.1",

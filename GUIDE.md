@@ -98,10 +98,11 @@ URL 加 `?room=你们的暗号` 开私密房间。
   **每满 6 条**自动揉成一段 150 字内的第一人称回忆，之后在旧回忆上续写、不推翻。
   歌曲详情页的「在场记录」和「歌曲分析」标签页都能看到。
 - **DJ 能力**：聊天中让 TA 放歌、切歌、暂停、继续、分享、红心、加待播队列——直接说就行。
-- **外部记忆接口**：`data/settings.json` 配 `ai.context_url` 指向你自己的记忆/RAG 服务，
-  每轮对话 POST `{message, song, user, ai}`，返回的 `{context}` 文本会注入提示词。
-  如果接口需要鉴权，再配 `ai.context_key`；Duetto 会通过 `Authorization: Bearer ...`
-  请求头发送，并在设置读取接口中像模型 Key 一样掩码，不会把密钥返回前端。
+- **Ombre 双向联动**：把 `ai.context_url` 设为 Ombre 的
+  `https://你的域名/api/duetto/context`，把 `ai.context_key` 设为同一个
+  `OMBRE_GATEWAY_TOKEN`。每轮音乐/共读对话都会取得独处状态与相关记忆；真实播放和共读
+  批注会自动回传到 `/api/duetto/events`。发送失败的事件会留在 SQLite 待发箱中后台重试，
+  同一个事件不会重复改变情绪。普通外部记忆/RAG 地址仍可单向使用，但不会自动回传事件。
 - **提示词透明**：浏览器打开 `/api/prompt-preview`（`?mode=stream` 看完整带思考版）
   能看到发给模型的完整 system 提示词。
 

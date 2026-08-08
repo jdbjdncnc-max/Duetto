@@ -9,11 +9,13 @@ import { createBookService, parseBookBuffer } from '../server/books.mjs';
 
 const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'duetto-books-'));
 const db = new DatabaseSync(path.join(tmp, 'books-test.db'));
+const emittedEvents = [];
 const service = createBookService({
   db,
   dataDir: tmp,
   assertPublicUrl: async () => {},
   fetchCapped: async () => { throw new Error('not used'); },
+  emitEvent: event => emittedEvents.push(event),
 });
 
 const app = express();
@@ -71,6 +73,11 @@ try {
     body: JSON.stringify({ id: imported.book.id, block_idx: target.idx, author: 'yu', text: '我也在这一页。', parent_id: note.note.id }),
   }).then(r => r.json());
   assert.equal(reply.ok, true);
+  assert.equal(emittedEvents.length, 2);
+  assert.equal(emittedEvents[0].type, 'com.duetto.book.note.created.v1');
+  assert.equal(emittedEvents[0].data.actor, 'user');
+  assert.equal(emittedEvents[1].data.actor, 'ai');
+  assert.equal(emittedEvents[0].data.book.title, '测试共读书');
 
   const nr = service.enrichReading({ id: imported.book.id, block_idx: target.idx, quote: passage });
   assert.equal(nr.title, '测试共读书');

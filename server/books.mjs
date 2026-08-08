@@ -336,7 +336,7 @@ function safeBlockIndex(book, value) {
   return Math.max(0, Math.min(max, Math.floor(Number(value) || 0)));
 }
 
-export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped }) {
+export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, emitEvent = () => {} }) {
   initBookSchema(db);
 
   function register(app) {
@@ -476,6 +476,20 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped })
         const result = db.prepare(`INSERT INTO book_notes(book_id,block_idx,sel_start,sel_end,passage,author,text,parent_id,pinned,ts)
           VALUES(?,?,?,?,?,?,?,?,?,?)`).run(book.id, blockIdx, start, end, passage, author, noteText, parentId, b.pinned ? 1 : 0, ts);
         const note = db.prepare('SELECT id,book_id,block_idx,sel_start,sel_end,passage,author,text,parent_id,pinned,ts FROM book_notes WHERE id=?').get(Number(result.lastInsertRowid));
+        emitEvent({
+          id: `book-note:${note.id}`,
+          type: 'com.duetto.book.note.created.v1',
+          subject: `book/${encodeURIComponent(book.id)}/note/${note.id}`,
+          time: new Date(ts).toISOString(),
+          data: {
+            actor: author === 'eve' ? 'user' : 'ai',
+            book: { id: book.id, title: book.title, author: book.author || '' },
+            note: {
+              id: String(note.id), block_idx: Number(note.block_idx) || 0,
+              passage: note.passage || '', text: note.text || '', parent_id: Number(note.parent_id) || 0,
+            },
+          },
+        });
         r.json({ ok: true, note });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });

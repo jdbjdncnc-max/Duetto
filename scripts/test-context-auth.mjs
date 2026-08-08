@@ -38,6 +38,17 @@ assert.equal(context, 'remembered context');
 assert.equal(capturedRequest.options.headers.Authorization, 'Bearer secret-token');
 assert.equal(capturedRequest.timeout, 4000);
 
+await contextSandbox.fetchContextUnderTest(
+  { ai: { context_url: 'https://ombre.example/api/duetto/context', context_key: 'secret-token' } },
+  'book note',
+  { id: 'b1', title: 'Book', author: 'Writer', chapter_title: 'Chapter One', block_idx: 8 },
+  'book',
+);
+const bookContextBody = JSON.parse(capturedRequest.options.body);
+assert.equal(bookContextBody.kind, 'book');
+assert.equal(bookContextBody.song, null);
+assert.equal(bookContextBody.book.title, 'Book');
+
 const redactSandbox = {};
 vm.createContext(redactSandbox);
 vm.runInContext(
@@ -66,15 +77,20 @@ const envConfigured = {
   DUETTO_ANALYSIS_BASE_URL: 'https://openrouter.ai/api/v1',
   DUETTO_ANALYSIS_API_KEY: 'analysis-secret',
   DUETTO_ANALYSIS_MODEL: 'google/gemini-2.5-flash',
+  DUETTO_CONTEXT_URL: 'https://ombre.example/api/duetto/context',
+  DUETTO_CONTEXT_KEY: 'context-secret',
 };
 const envAi = envSandbox.applyAiEnvUnderTest({ api_key: 'file-secret' }, envConfigured);
 assert.equal(envAi.base_url, 'https://ombre.example/v1');
 assert.equal(envAi.api_key, 'gateway-secret');
 assert.equal(envAi.a_key, 'analysis-secret');
 assert.equal(envAi.a_model, 'google/gemini-2.5-flash');
+assert.equal(envAi.context_url, 'https://ombre.example/api/duetto/context');
+assert.equal(envAi.context_key, 'context-secret');
 const persistedAi = envSandbox.stripEnvManagedAiSecretsUnderTest(envAi, envConfigured);
 assert.equal(Object.hasOwn(persistedAi, 'api_key'), false);
 assert.equal(Object.hasOwn(persistedAi, 'a_key'), false);
+assert.equal(Object.hasOwn(persistedAi, 'context_key'), false);
 assert.equal(envAi.api_key, 'gateway-secret');
 
 const promptSandbox = {
@@ -100,11 +116,13 @@ const scenePrompt = promptSandbox.sysPromptUnderTest(
   },
   'music',
   { title: 'Test Song', artist: 'Test Artist' },
-  '',
+  'current solitude state',
 );
 assert.equal(scenePrompt.includes('SHOULD_NOT_APPEAR_PERSONA'), false);
 assert.equal(scenePrompt.includes('SHOULD_NOT_APPEAR_STYLE'), false);
 assert.equal(scenePrompt.includes('<<ACT>>'), true);
 assert.equal(scenePrompt.includes('Test Song'), true);
+assert.equal(scenePrompt.includes('Ombre 提供的当前状态与相关记忆'), true);
+assert.equal(scenePrompt.includes('current solitude state'), true);
 
 console.log('context auth tests passed');

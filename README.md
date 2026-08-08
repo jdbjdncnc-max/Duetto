@@ -54,9 +54,11 @@ DUETTO_CHAT_MODEL=zeta-gateway
 DUETTO_ANALYSIS_BASE_URL=https://openrouter.ai/api/v1
 DUETTO_ANALYSIS_API_KEY=your-openrouter-key
 DUETTO_ANALYSIS_MODEL=google/gemini-2.5-flash
+DUETTO_CONTEXT_URL=https://your-ombre.example/api/duetto/context
+DUETTO_CONTEXT_KEY=your-ombre-gateway-token
 ```
 
-When either Key environment variable is configured, Duetto automatically removes that same
+When a Key environment variable is configured, Duetto automatically removes that same
 plaintext Key from an existing `data/settings.json` at startup and never writes it back through
 `POST /api/settings`. The JSON file may still hold non-secret defaults such as `ai.base_url`,
 `ai.model`, `ai.a_base`, and `ai.a_model`.
@@ -69,12 +71,14 @@ to* songs (audio in) and write impressions. Fill in as much or as little as you 
 name, just a key, or a full endpoint+key+name — anything missing is borrowed from your chat config.
 Leave it empty to use the chat model. Server-side defaults: `ai.a_model` / `ai.a_base` / `ai.a_key`.
 
-**External memory (optional).** Set `ai.context_url` in `data/settings.json` to a POST endpoint of
-your own. Each chat turn Duetto sends `{message, song, user, ai}` and injects the returned
-`{context}` text into the prompt as shared memory. Set `ai.context_key` to send it as an
-`Authorization: Bearer ...` header. The key is masked by `GET /api/settings`, just like the model
-keys. 4-second budget; failures are silent. Leave it empty when the chat endpoint is the Ombre
-gateway, because that gateway already performs memory recall.
+**Ombre context and event bridge (optional).** Set `ai.context_url` to
+`https://your-ombre.example/api/duetto/context` and set `ai.context_key` to the same value as
+`OMBRE_GATEWAY_TOKEN`. Each chat turn receives Ombre's current solitude state plus recalled
+memory. Duetto also derives `/api/duetto/events` from that URL and sends real song-play and book-note
+events back to Ombre. Failed event deliveries stay in a SQLite outbox and retry in the background;
+the event ID prevents a retry from changing emotion twice. The key is masked by
+`GET /api/settings`, just like the model keys. A generic non-Ombre `context_url` still works as a
+one-way external memory hook, but does not enable automatic event delivery.
 
 ## How it works
 
