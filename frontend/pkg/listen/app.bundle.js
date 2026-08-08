@@ -805,8 +805,8 @@
     if(history)body.history=history;
     return fetch(API+'/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)})
       .then(function(r){return r.json();})
-      .then(function(d){ if(d&&d.ok){ try{window.__lsLastThink=String(d.think||'');window.__lsLastResponseMeta={model:String(d.model||ai.model||''),usage:d.usage||null};}catch(e){} return d.reply||''; } return '[AI not set up yet - add your endpoint + key in Settings or the Model tab]'; })
-      .catch(function(e){ return '[AI error: '+(e&&e.message||e)+']'; });
+      .then(function(d){ if(d&&d.ok){ try{window.__lsLastThink=String(d.think||'');window.__lsLastResponseMeta={model:String(d.model||ai.model||''),usage:d.usage||null};}catch(e){} return d.reply||''; } return '[对话模型错误: '+String(d&&d.error||'请求失败')+']'; })
+      .catch(function(e){ return '[对话连接错误: '+(e&&e.message||e)+']'; });
   }
   function complete(prompt, opts){
     try{window.__lsLastResponseMeta=null;}catch(e){}
@@ -1206,7 +1206,7 @@ const LS_PEOPLE={yu:{key:'yu',name:function(){try{return localStorage.getItem('l
     send:function(m){ if(applying)return; if(ws&&ws.readyState===1) ws.send(JSON.stringify(m)); },
     connected:function(){return connected;},
     room:room,
-    aiSend:function(prompt, ai){ return new Promise(function(res){ if(!ws||ws.readyState!==1){ res(null); return; } var id='ai'+(++aiSeq); aiPending[id]=res; var msg={t:'ai',id:id,prompt:prompt}; if(ai)msg.ai=ai; ws.send(JSON.stringify(msg)); setTimeout(function(){ if(aiPending[id]){ delete aiPending[id]; res(null); } },45000); }); }
+    aiSend:function(prompt, ai){ return new Promise(function(res){ if(!ws||ws.readyState!==1){ res(null); return; } var id='ai'+(++aiSeq); aiPending[id]=res; var msg={t:'ai',id:id,prompt:prompt}; if(ai)msg.ai=ai; ws.send(JSON.stringify(msg)); setTimeout(function(){ if(aiPending[id]){ delete aiPending[id]; res('[对话请求超时，请重试]'); } },45000); }); }
   };
   if(document.readyState!=='loading')connect();else document.addEventListener('DOMContentLoaded',connect);
 })();

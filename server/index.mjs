@@ -213,8 +213,17 @@ bookService.register(app);
 function timeBucket(h){ if(h<5)return '深夜'; if(h<9)return '清晨'; if(h<12)return '上午'; if(h<14)return '午间'; if(h<18)return '下午'; if(h<23)return '晚上'; return '深夜'; }
 // 外部记忆接口（可选）：settings.ai.context_url 指向部署者自己的记忆/召回服务，
 // 每次对话 POST {message, song, user, ai}，把返回的 {context} 文本注入提示词——新用户接自己的记忆体系用
+function usesOmbreRecallHandoff(s){
+  try {
+    const ai=s&&s.ai||{};
+    const chat=new URL(String(ai.base_url||''));
+    const context=new URL(String(ai.context_url||''));
+    return chat.origin===context.origin&&/\/api\/duetto\/context\/?$/.test(context.pathname);
+  } catch(e){ return false; }
+}
 async function fetchContext(s, prompt, np, kind='music'){
-  const u = s.ai && s.ai.context_url; if (!u || !/^https:/.test(String(u))) return '';
+  const u = s.ai && s.ai.context_url; if (!u || !/^https:/.test(String(u))) return {text:'',recallInjected:false};
+  const recallHandoff=usesOmbreRecallHandoff(s);
   try {
     await assertPublicUrl(String(u));
     const headers={'Content-Type':'application/json'};
@@ -223,11 +232,13 @@ async function fetchContext(s, prompt, np, kind='music'){
     const ref = np ? (kind==='book'
       ? { id:np.id,title:np.title,author:np.author||'',chapter:np.chapter||0,chapter_title:np.chapter_title||'',block_idx:np.block_idx||0 }
       : { id:np.id,title:np.title,artist:np.artist }) : null;
-    const rr = await fetchT(String(u), { method:'POST', headers, body: JSON.stringify({ message:String(prompt||''), kind, song:kind==='music'?ref:null, book:kind==='book'?ref:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') }) }, 4000);
-    if (!rr.ok) return '';
+    const body={ message:String(prompt||''), kind, song:kind==='music'?ref:null, book:kind==='book'?ref:null, user:(s.ai.user_name||''), ai:(s.ai.ai_name||'') };
+    if(recallHandoff)body.context_mode='memory_only';
+    const rr = await fetchT(String(u), { method:'POST', headers, body: JSON.stringify(body) }, 4000);
+    if (!rr.ok) return {text:'',recallInjected:false};
     const d = await rr.json().catch(()=>null);
-    return String((d && (d.context || d.text || d.memory)) || '').slice(0, 4000);
-  } catch(e){ return ''; }
+    return {text:String((d && (d.context || d.text || d.memory)) || '').slice(0, 4000),recallInjected:recallHandoff};
+  } catch(e){ return {text:'',recallInjected:false}; }
 }
 function sysPrompt(s,kind,np,ctx){ const who=s.ai.ai_name||s.ai_name||'DJ',partner=s.ai.user_name||s.user_name||'You'; const scene=kind==='book'?'一起读书':'一起听歌'; const stream=s.ai.reply_mode==='stream';
  // 完整人格由 Ombre 网关统一注入；这里仅追加 Duetto 的场景、格式和播放器指令。
@@ -328,8 +339,8 @@ async function enrichNp(s, np){
   if (a) np.analysis = a.text;
   else {
     const r = ensureAnalysis(s, np);
-    const t = (r && typeof r.then === 'function') ? await Promise.race([r, new Promise(res => setTimeout(() => res(null), 110000))]) : r;
-    if (t) np.analysis = t;
+    // 新歌分析真正放到后台：聊天不再等待整首音频下载与多模态分析。
+    if (r && typeof r.then === 'function') void r.catch(()=>{});
   }
   const im = readImpression(sid);
   if (im) np.impression = im.text;
@@ -447,7 +458,9 @@ async function callLLMResult(s,messages,over){
   const base=String(s.ai.base_url||'').replace(/\/+$/,'');
   if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503});
   const requestedModel=(over&&over.model)||s.ai.model;
-  const rr=await fetchT(base+'/chat/completions',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key},body:JSON.stringify({model:requestedModel,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000);
+  const headers={'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key};
+  if(over&&over.recallInjected)headers['X-Ombre-Recall-Mode']='injected';
+  const rr=await fetchT(base+'/chat/completions',{method:'POST',headers,body:JSON.stringify({model:requestedModel,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000);
   if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});}
   const d=await rr.json();
   return {
@@ -457,7 +470,7 @@ async function callLLMResult(s,messages,over){
   };
 }
 async function callLLM(s,messages,over){ return (await callLLMResult(s,messages,over)).text; }
-app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null,nowReading=null}=q.body||{}; const np=kind==='book'?(nowReading||(bb.ai&&bb.ai.nowReading)||null):(nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null); const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,1200); if(kind==='book') bookService.enrichReading(np); else await enrichNp(s,np); } const ctx=await fetchContext(s, prompt, np, kind); const result=await callLLMResult(s,[{role:'system',content:sysPrompt(s,kind,np,ctx)},...past,{role:'user',content:String(prompt)}]); const raw=result.text; let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(kind!=='book'&&!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think,model:result.model,usage:result.usage}); }catch(e){ r.status(e.status||500).json({ok:false,error:e.message}); } });
+app.post('/api/chat',async(q,r)=>{ try{ const s0=getSettings(); const bb=q.body||{}; const s={...s0, ai:mergeAi(s0.ai,bb.ai)}; if(!s.ai.api_key)return r.status(503).json({ok:false,error:'AI not set up: open the Model tab and add your endpoint + key'}); const {kind='music',prompt='',history=[],nowPlaying=null,nowReading=null}=q.body||{}; const np=kind==='book'?(nowReading||(bb.ai&&bb.ai.nowReading)||null):(nowPlaying||(bb.ai&&bb.ai.nowPlaying)||null); const past=Array.isArray(history)?history.slice(-12).filter(m=>m&&m.role&&typeof m.content==='string'):[]; if(np){ if(bb.ai&&bb.ai.quote) np.quote=String(bb.ai.quote).slice(0,1200); if(kind==='book') bookService.enrichReading(np); else await enrichNp(s,np); } const ctxResult=await fetchContext(s, prompt, np, kind); const result=await callLLMResult(s,[{role:'system',content:sysPrompt(s,kind,np,ctxResult.text)},...past,{role:'user',content:String(prompt)}],{recallInjected:ctxResult.recallInjected}); const raw=result.text; let reply, think=''; if(s.ai.reply_mode==='stream'){ const st=stripThinking(raw); reply=st.text; think=st.think; } else { reply=deStar(parseReplies(raw)).join('\n'); } if(kind!=='book'&&!(bb.ai&&bb.ai.no_note)) logRoomNote(s, np, prompt, reply); r.json({ok:true,reply,think,model:result.model,usage:result.usage}); }catch(e){ console.log('[chat err]',e.message); r.status(e.status||500).json({ok:false,error:e.message}); } });
 // —— Song analysis: cached per song id so each song is analyzed once ——
 function readAnalysis(sid){ try { return db.prepare("SELECT id,title,artist,text,ts FROM song_analysis WHERE id=? AND text!=''").get(String(sid)) || null; } catch(e){ return null; } }
 function appendAnalysis(e){ try { db.prepare('INSERT OR REPLACE INTO song_analysis(id,title,artist,text,ts) VALUES(?,?,?,?,?)').run(String(e.id||''), e.title||'', e.artist||'', e.text||'', e.ts||Date.now()); } catch(err){} }
@@ -591,12 +604,12 @@ wss.on('connection', (sock, req) => {
         const past = Array.isArray(hist) ? hist.slice(-12).filter(x=>x&&x.role&&typeof x.content==='string') : [];
         if (np) { if (m.ai && m.ai.quote) np.quote = String(m.ai.quote).slice(0,1200); if(kind2==='book') bookService.enrichReading(np); else await enrichNp(eff, np); }
         const ctx2 = await fetchContext(eff, m.prompt, np, kind2);
-        const result2 = await callLLMResult(eff, [{ role:'system', content: sysPrompt(eff, kind2, np, ctx2) }, ...past, { role:'user', content: String(m.prompt||'') }]);
+        const result2 = await callLLMResult(eff, [{ role:'system', content: sysPrompt(eff, kind2, np, ctx2.text) }, ...past, { role:'user', content: String(m.prompt||'') }], {recallInjected:ctx2.recallInjected});
         const raw2 = result2.text;
         let reply, think2=''; if (eff.ai.reply_mode==='stream') { const st=stripThinking(raw2); reply=st.text; think2=st.think; } else { reply=deStar(parseReplies(raw2)).join('\n'); }
         if (kind2!=='book' && !(m.ai && m.ai.no_note)) logRoomNote(eff, np, m.prompt, reply);
         sock.send(JSON.stringify({ t:'ai', id:m.id, reply, think: think2, model:result2.model, usage:result2.usage }));
-      } catch(e) { sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[AI error: '+e.message+']' })); }
+      } catch(e) { console.log('[chat err]',String((m&&m.ai&&m.ai.model)||''),e.message); sock.send(JSON.stringify({ t:'ai', id:m.id, reply:'[对话模型错误: '+e.message+']' })); }
       return;
     }
     // chat/share/system messages: persist to the room timeline, then relay
