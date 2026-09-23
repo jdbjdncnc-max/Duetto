@@ -23,7 +23,7 @@ function LSMarkedText({ block, notes }) {
   return <span className="ls-book-text">{pieces}</span>;
 }
 
-function LSNoteThread({ root, replies, onReply, onAsk, onPin, aiBusy }) {
+function LSNoteThread({ root, replies, onReply, onAsk, onPin, onEmotion, aiBusy }) {
   const yuName = (window.LS_PEOPLE && window.LS_PEOPLE.yu && window.LS_PEOPLE.yu.name) || 'TA';
   const eveName = (window.LS_PEOPLE && window.LS_PEOPLE.eve && window.LS_PEOPLE.eve.name) || '我';
   const renderNote = function (note, reply) {
@@ -37,9 +37,16 @@ function LSNoteThread({ root, replies, onReply, onAsk, onPin, aiBusy }) {
         </div>
         {note.passage && !reply ? <blockquote>“{note.passage}”</blockquote> : null}
         <p>{note.text}</p>
+        <div className="ls-book-emotions" aria-label="这段话的情绪标签">
+          {['😭','🙂','😡','🤯'].map(function (emoji) {
+            const mine = (note.emotions || []).some(function (e) { return e.actor === 'eve' && e.emoji === emoji; });
+            return <button key={emoji} aria-label={'我的感受 ' + emoji} aria-pressed={mine} onClick={function () { onEmotion(note, mine ? '' : emoji, 'eve'); }}>{emoji}</button>;
+          })}
+          {(note.emotions || []).filter(function (e) { return e.actor === 'yu'; }).map(function (e) { return <span key={e.actor}>{yuName} {e.emoji}</span>; })}
+        </div>
         <div className="ls-book-note-actions">
           <button onClick={function () { onReply(root); }}>回复</button>
-          {!isYu && !reply ? <button disabled={aiBusy} onClick={function () { onAsk(root); }}>{aiBusy ? 'TA 正在读…' : '问 TA'}</button> : null}
+          {!isYu && !reply ? <button disabled={aiBusy} onClick={function () { onAsk(root); }}>{aiBusy ? '她正在读…' : '叫她来'}</button> : null}
           <button onClick={function () { onPin(note); }}>{note.pinned ? '取消记住' : '记住'}</button>
         </div>
       </div>
@@ -62,6 +69,13 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
   const [draft, setDraft] = rUseState('');
   const [saving, setSaving] = rUseState(false);
   const [aiBusy, setAiBusy] = rUseState(0);
+  const [expanded, setExpanded] = rUseState({});
+  const [reviewOpen, setReviewOpen] = rUseState(false);
+  const [reviewFrom, setReviewFrom] = rUseState(1);
+  const [reviewTo, setReviewTo] = rUseState(5);
+  const [reviewDays, setReviewDays] = rUseState(0);
+  const [reviewText, setReviewText] = rUseState('');
+  const [reviewBusy, setReviewBusy] = rUseState(false);
   const [follow, setFollow] = rUseState(false);
   const [remote, setRemote] = rUseState(null);
   const [fontSize, setFontSize] = rUseState(function () { return Number(localStorage.getItem('ls-reader-size') || 18); });
@@ -113,6 +127,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       const theirs = progress.find(function (p) { return p.who === 'yu'; });
       setMeta(book);
       setChapters(all[0].chapters || []);
+      setReviewTo(Math.min(5, (all[0].chapters || []).length || 1));
       if (theirs) setRemote({ block_idx: Number(theirs.block_idx) || 0, pct: Number(theirs.pct) || 0, who: 'yu' });
       return loadRange(mine ? mine.block_idx : 0, book);
     }).catch(function (e) {
@@ -156,7 +171,9 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       lsBookApi('/book-progress', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: meta.id, who: 'eve', block_idx: current, ts: ts }),
-      }).catch(function () {});
+      }).then(function (d) {
+        if (window.parent !== window) window.parent.postMessage({ type: 'duetto:reading-position', position: Object.assign({}, d.progress, { book_id: meta.id, title: meta.title }) }, '*');
+      }).catch(function (e) { setError('阅读位置尚未同步：' + e.message); });
       try {
         if (window.__LS_SYNC && window.__LS_SYNC.send) window.__LS_SYNC.send({
           t: 'read', book: { id: meta.id, title: meta.title, author: meta.author || '' },
@@ -210,8 +227,43 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
         block_idx: Number(startBlock.getAttribute('data-book-block')) || 0,
         sel_start: start, sel_end: start + range.toString().length, passage: passage, parent_id: 0,
       });
-      setDraft('');
     }, 20);
+  };
+
+  rUseEffect(function () {
+    document.addEventListener('selectionchange', captureSelection);
+    return function () { document.removeEventListener('selectionchange', captureSelection); };
+  }, [bookId]);
+
+  const setEmotion = async function (note, emoji, actor) {
+    try {
+      const d = await lsBookApi('/book-note/emotion', { method:'POST', headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({ id:bookId, note_id:note.id, actor:actor, emoji:emoji }) });
+      setNotes(function (list) { return list.map(function (n) { return n.id === note.id ? d.note : n; }); });
+    } catch(e) { setError(e.message); }
+  };
+
+  const reviewBook = async function () {
+    if (reviewBusy) return;
+    setReviewBusy(true); setError('');
+    try {
+      let after = 0, collected = [];
+      const since = reviewDays ? Date.now() - Number(reviewDays) * 86400000 : 0;
+      do {
+        const d = await lsBookApi('/book-review?id=' + encodeURIComponent(bookId) + '&from_chapter=' + reviewFrom + '&to_chapter=' + reviewTo + '&since=' + since + '&after=' + after);
+        collected = collected.concat(d.notes || []); after = d.next;
+        if (collected.length > 500 || JSON.stringify(collected).length > 90000) throw new Error('记录较多，请缩小章节或时间范围再整理。');
+      } while(after);
+      if (!collected.length) { setReviewText('这段范围里还没有高亮或讨论。'); return; }
+      const d = await lsBookApi('/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+        kind:'book', prompt:'请按章节回顾我们一起读过的重点，包含画线原文、我的想法、你的补充和双方的情绪标签。明确标出章节和段落；没有记录的内容不要补写。',
+        history:[], ai:window.__lsAiConfig ? window.__lsAiConfig() : undefined,
+        nowReading:{ id:bookId, block_idx:current, mode:'review' }, readingReview:collected
+      }) });
+      if (!d.reply) throw new Error('她暂时没有返回整理内容，请重试。');
+      setReviewText(d.reply);
+    } catch(e) { setError(e.message); }
+    finally { setReviewBusy(false); }
   };
 
   const postNote = function (payload) {
@@ -225,7 +277,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
   };
 
   const saveDraft = async function (askAfter) {
-    const text = draft.trim();
+    const text = draft.trim() || (askAfter ? "这句话你怎么看？" : "");
     if (!selection || !text || saving) return;
     setSaving(true);
     setError('');
@@ -234,31 +286,35 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
         id: bookId, block_idx: selection.block_idx, sel_start: selection.sel_start || 0, sel_end: selection.sel_end || 0,
         passage: selection.parent_id ? '' : selection.passage || '', author: 'eve', text: text, parent_id: selection.parent_id || 0,
       });
+      setExpanded(function (x) { return Object.assign({}, x, { [selection.block_idx]: true }); });
       setSelection(null);
       setDraft('');
       try { window.getSelection && window.getSelection().removeAllRanges(); } catch (e) {}
-      if (askAfter) await askAI(selection.parent_id ? notes.find(function (n) { return n.id === selection.parent_id; }) || note : note);
+      if (askAfter) await askAI(selection.parent_id ? notes.find(function (n) { return n.id === selection.parent_id; }) || note : note, note);
     } catch (e) { setError(e.message); }
     setSaving(false);
   };
 
-  const askAI = async function (root) {
+  const askAI = async function (root, newNote) {
     if (!root || aiBusy) return;
     setAiBusy(root.id);
     setError('');
     try {
       const thread = [root].concat(notes.filter(function (n) { return Number(n.parent_id) === Number(root.id); }));
+      if (newNote && !thread.some(function(n){return n.id===newNote.id;})) thread.push(newNote);
       const history = thread.map(function (n) { return { role: n.author === 'yu' ? 'assistant' : 'user', content: n.text }; });
       const prompt = '我在正文旁边写了一条批注。请贴着这段文字回应我，像共同阅读时写在页边的一句话，不要讲课。\n'
-        + (root.passage ? ('原文：「' + root.passage + '」\n') : '') + '我的批注：' + root.text;
+        + (root.passage ? ('原文：「' + root.passage + '」\n') : '') + '当前想法：' + (newNote ? newNote.text : root.text) + '\n这条高亮的情绪标签：' + JSON.stringify(root.emotions || []);
       const d = await lsBookApi('/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          kind: 'book', prompt: prompt, history: history.slice(0, -1), ai: window.__lsAiConfig ? window.__lsAiConfig() : undefined,
-          nowReading: { id: bookId, block_idx: root.block_idx, quote: root.passage || '' },
+          kind: 'book', prompt: prompt, history: history, ai: window.__lsAiConfig ? window.__lsAiConfig() : undefined,
+          nowReading: { id: bookId, block_idx: root.block_idx, quote: root.passage || '', mode: 'selection' },
         }),
       });
-      await postNote({ id: bookId, block_idx: root.block_idx, passage: '', author: 'yu', text: d.reply || '我在。', parent_id: root.id });
+      if (!d.reply || !d.reply.trim()) throw new Error('她暂时没有返回回复，请重试。');
+      await postNote({ id: bookId, block_idx: root.block_idx, passage: '', author: 'yu', text: d.reply, parent_id: root.id });
+      if (d.emotion) await setEmotion(root, d.emotion, 'yu');
     } catch (e) { setError(e.message); }
     setAiBusy(0);
   };
@@ -279,7 +335,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
     return out;
   }, [notes]);
 
-  const currentChapter = chapters.find(function (c) {
+  const currentChapter = chapters.slice().reverse().find(function (c) {
     return current >= Number(c.start_block) && current <= Number(c.end_block);
   });
   const pct = meta && Number(meta.block_count) > 1 ? Math.max(0, Math.min(100, current / (Number(meta.block_count) - 1) * 100)) : 0;
@@ -319,6 +375,15 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
         }}>房间</button>
       </div>
 
+      <div className="ls-reading-actions"><button onClick={function(){setReviewOpen(!reviewOpen);}}>回顾我们读过的</button>
+        <span>第 {Math.floor(current / 20) + 1} 页 · 每 20 段一页</span></div>
+      {reviewOpen ? <section className="ls-reader-review">
+        <label>从第 <input aria-label="起始章节" type="number" min="1" value={reviewFrom} onChange={function(e){setReviewFrom(Number(e.target.value));}}/> 节</label>
+        <label>到第 <input aria-label="结束章节" type="number" min="1" max={chapters.length} value={reviewTo} onChange={function(e){setReviewTo(Number(e.target.value));}}/> 节</label>
+        <select aria-label="复盘时间范围" value={reviewDays} onChange={function(e){setReviewDays(Number(e.target.value));}}><option value="0">全部时间</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option></select>
+        <button disabled={reviewBusy} onClick={reviewBook}>{reviewBusy ? '正在整理…' : '一起复盘'}</button>
+        <pre>{reviewText}</pre>
+      </section> : null}
       {error ? <div className="ls-reader-error">{error}<button onClick={function () { setError(''); }}>×</button></div> : null}
 
       <div className="ls-reader-scroll" ref={scrollRef} onScroll={onScroll} onMouseUp={captureSelection} onTouchEnd={captureSelection} style={{ '--reader-size': fontSize + 'px' }}>
@@ -334,10 +399,14 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
                 : block.kind === 'quote'
                   ? <blockquote className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></blockquote>
                   : <p className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></p>}
-              {roots.length ? <div className="ls-book-notes">{roots.map(function (root) {
+              <div className="ls-reading-actions">
+                <button onClick={function(){setSelection({block_idx:block.idx, sel_start:0, sel_end:block.text.length, passage:block.text, parent_id:0});setDraft('');}}>选这段 · 问她／批注</button>
+                {roots.length ? <button aria-expanded={!!expanded[block.idx]} onClick={function(){setExpanded(function(x){return Object.assign({},x,{[block.idx]:!x[block.idx]});});}}>这一段有 {blockNotes.length} 条对话</button> : null}
+              </div>
+              {roots.length && expanded[block.idx] ? <div className="ls-book-notes">{roots.map(function (root) {
                 return <LSNoteThread key={root.id} root={root} replies={blockNotes.filter(function (n) { return Number(n.parent_id) === Number(root.id); })} aiBusy={aiBusy === root.id}
                   onReply={function (note) { setSelection({ block_idx: note.block_idx, passage: note.passage || '', parent_id: note.id }); setDraft(''); }}
-                  onAsk={askAI} onPin={pinNote} />;
+                  onAsk={askAI} onPin={pinNote} onEmotion={setEmotion} />;
               })}</div> : null}
             </article>
           );
@@ -358,14 +427,14 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
             <span>{selection.parent_id ? '回复这条批注' : ('“' + selection.passage + '”')}</span>
             <button onClick={function () { setSelection(null); setDraft(''); }}>×</button>
           </div>
-          <textarea autoFocus value={draft} onChange={function (e) { setDraft(e.target.value); }} placeholder={selection.parent_id ? '写下回复…' : '在页边写点什么…'} />
+          <textarea value={draft} onChange={function (e) { setDraft(e.target.value); }} placeholder={selection.parent_id ? '写下回复…' : '在页边写点什么…'} />
           <div className="ls-book-compose-actions">
             {!selection.parent_id ? <button className="room" onClick={function () {
               window.__lsPendingQuote = { line: selection.passage, kind: 'book', book: meta && meta.title, book_id: bookId, block_idx: selection.block_idx };
               setSelection(null); setDraft(''); onOpenRoom && onOpenRoom();
             }}>发到房间</button> : <span></span>}
             <button disabled={!draft.trim() || saving} onClick={function () { saveDraft(false); }}>存批注</button>
-            {!selection.parent_id ? <button className="ask" disabled={!draft.trim() || saving} onClick={function () { saveDraft(true); }}>存下并问 TA</button> : null}
+            {!selection.parent_id ? <button className="ask" disabled={saving || !!aiBusy} onClick={function () { saveDraft(true); }}>{draft.trim() ? '存下并叫她来' : '问她'}</button> : null}
           </div>
         </div>
       ) : null}

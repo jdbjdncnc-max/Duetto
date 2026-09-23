@@ -1707,3 +1707,21 @@ html.ombre-embed .ls-input .send {
 .ls-localadd .tip{margin-top:8px;font-family:var(--ls-cn);font-size:11px;color:var(--ls-ink-faint);text-align:center}
 .ls-songrow .locdel{width:30px;height:30px;border:none;background:none;color:var(--ls-ink-faint);font-size:17px;cursor:pointer;flex-shrink:0;padding:0}
 .ls-songrow .locdel:hover{color:#c0392b}
+
+/* Embedded Duetto reveals Entangle's actual global wallpaper. */
+html.ombre-embed, html.ombre-embed body, html.ombre-embed #ls-root,
+html.ombre-embed .ls-app, html.ombre-embed .ls-col { background: transparent !important; box-shadow:none; border:0; border-radius:0; }
+html.ombre-embed .ls-wall, html.ombre-embed .ls-amb, html.ombre-embed .ls-grain { display:none !important; }
+.ls-reading-actions { display:flex; gap:8px; align-items:center; padding:4px 0; flex-wrap:wrap; }
+.ls-reading-actions button, .ls-reader-review button { min-height:40px; border:1px solid var(--ls-line); border-radius:10px; padding:6px 12px; color:var(--ls-ink); background:var(--ls-panel); }
+.ls-book-emotions { display:flex; gap:6px; align-items:center; flex-wrap:wrap; }
+.ls-book-emotions button { font-size:20px; min-width:40px; min-height:40px; border:1px solid transparent; background:transparent; border-radius:10px; }
+.ls-book-emotions button[aria-pressed=true] { border-color:var(--ls-gold); background:var(--ls-panel); }
+.ls-reader-review { padding:16px; border-bottom:1px solid var(--ls-line); max-height:55vh; overflow:auto; }
+.ls-reader-review label { display:inline-flex; gap:6px; margin:4px; align-items:center; }
+.ls-reader-review input { width:60px; }
+.ls-reader-review pre { white-space:pre-wrap; font:inherit; line-height:1.8; user-select:text; }
+.ls-book-compose textarea { min-height:64px; }
+
+html.ombre-embed .ls-book-hero { background:transparent; border:0; box-shadow:none; padding:14px 0; border-radius:0; }
+html.ombre-embed .ls-book-hero::after { display:none; }

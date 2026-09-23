@@ -84,6 +84,38 @@ try {
   assert.ok(nr.window.includes('第二段正文'));
   assert.equal(nr.notes.length, 2);
 
+  assert.equal(progress.progress.book_id, imported.book.id);
+  assert.equal(progress.progress.page, Math.floor(target.idx / 20) + 1);
+  assert.equal(typeof progress.progress.paragraph_offset, 'number');
+  const savedProgress = await fetch(base + '/book-progress?id=' + imported.book.id).then(r => r.json());
+  assert.equal(savedProgress.progress[0].page, progress.progress.page);
+
+  const selected = service.enrichReading({ id: imported.book.id, block_idx: target.idx, quote: passage, mode:'selection' });
+  assert.equal(selected.quote, passage);
+  for (const field of ['window','notes','digest','chap_summary','impression']) assert.equal(selected[field], undefined);
+  assert.throws(() => service.enrichReading({ id: imported.book.id, block_idx: target.idx, quote:'伪造的原文', mode:'selection' }), /不匹配/);
+  for (const actor of ['eve','yu']) {
+    const tagged = await fetch(base + '/book-note/emotion', {method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({id:imported.book.id,note_id:note.note.id,actor,emoji:actor==='eve'?'😭':'🙂'})}).then(r=>r.json());
+    assert.equal(tagged.ok,true);
+  }
+  const reread = await fetch(base + '/book-notes?id=' + imported.book.id + '&from=0&to=50').then(r=>r.json());
+  assert.equal(reread.notes.find(n=>n.id===note.note.id).emotions.length,2);
+  const review = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=1&to_chapter=5').then(r=>r.json());
+  assert.equal(review.notes.length,2);
+  assert.equal(review.notes[0].emotions.length,2);
+  assert.equal(review.notes[1].parent_id,note.note.id);
+  assert.equal(review.notes[0].chapter_title,'第一章 初见');
+  const noNotes = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=1&to_chapter=5&since='+(Date.now()+10000)).then(r=>r.json());
+  assert.equal(noNotes.notes.length,0);
+  const invalidRange = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=5&to_chapter=1');
+  assert.equal(invalidRange.status,400);
+  // Large review ranges are losslessly paginated rather than silently truncated.
+  for (let i=0;i<105;i++) db.prepare('INSERT INTO book_notes(book_id,block_idx,author,text,parent_id,ts) VALUES(?,?,?,?,?,?)').run(imported.book.id,target.idx,'eve','复盘 '+i,note.note.id,Date.now());
+  const pageOne = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=1&to_chapter=5').then(r=>r.json());
+  const pageTwo = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=1&to_chapter=5&after='+pageOne.next).then(r=>r.json());
+  assert.equal(pageOne.notes.length,100); assert.equal(pageTwo.notes.length,7); assert.equal(pageTwo.next,null);
+
   const epub = zipSync({
     'META-INF/container.xml': strToU8('<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>'),
     'OEBPS/content.opf': strToU8('<?xml version="1.0"?><package><metadata><dc:title>EPUB 测试书</dc:title><dc:creator>Duetto</dc:creator><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>'),

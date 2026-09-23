@@ -275,10 +275,18 @@ export function initBookSchema(db) {
       sel_start INTEGER DEFAULT 0, sel_end INTEGER DEFAULT 0, passage TEXT DEFAULT '',
       author TEXT, text TEXT, parent_id INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, ts INTEGER
     );
+    CREATE TABLE IF NOT EXISTS book_emotions(
+      note_id INTEGER, actor TEXT, emoji TEXT, ts INTEGER,
+      PRIMARY KEY(note_id, actor)
+    );
     CREATE INDEX IF NOT EXISTS idx_bnotes ON book_notes(book_id, block_idx, ts);
     CREATE TABLE IF NOT EXISTS book_impressions(book_id TEXT, text TEXT, n INTEGER, ts INTEGER);
     CREATE INDEX IF NOT EXISTS idx_bimpr ON book_impressions(book_id, ts);
   `);
+  const progressColumns = new Set(db.prepare('PRAGMA table_info(book_progress)').all().map(x => x.name));
+  for (const column of ['chapter', 'paragraph_offset', 'page']) {
+    if (!progressColumns.has(column)) db.exec(`ALTER TABLE book_progress ADD COLUMN ${column} INTEGER DEFAULT 0`);
+  }
   try {
     db.exec('CREATE VIRTUAL TABLE IF NOT EXISTS book_fts USING fts5(book_id UNINDEXED, idx UNINDEXED, text)');
     ftsReady = true;
@@ -419,7 +427,7 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
     app.get('/api/book-progress', (q, r) => {
       try {
         const id = textValue(q.query.id, 64);
-        const progress = db.prepare('SELECT who,block_idx,pct,ts FROM book_progress WHERE book_id=? ORDER BY who').all(id);
+        const progress = db.prepare('SELECT who,block_idx,pct,ts,chapter,paragraph_offset,page FROM book_progress WHERE book_id=? ORDER BY who').all(id);
         r.json({ ok: true, progress });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });
@@ -436,7 +444,10 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
         db.prepare(`INSERT INTO book_progress(book_id,who,block_idx,pct,ts) VALUES(?,?,?,?,?)
           ON CONFLICT(book_id,who) DO UPDATE SET block_idx=excluded.block_idx,pct=excluded.pct,ts=excluded.ts
           WHERE excluded.ts>=book_progress.ts`).run(book.id, who, block, pct, ts);
-        r.json({ ok: true, progress: { who, block_idx: block, pct, ts } });
+        const location = readingPosition(book.id, block);
+        db.prepare('UPDATE book_progress SET chapter=?,paragraph_offset=?,page=? WHERE book_id=? AND who=? AND ts=?')
+          .run(location.chapter, location.paragraph_offset, location.page, book.id, who, ts);
+        r.json({ ok: true, progress: { who, block_idx: block, pct, ts, ...location } });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });
 
@@ -447,7 +458,7 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
         const to = Math.max(from, Math.floor(Number(q.query.to) || from + 199));
         const notes = db.prepare(`SELECT id,book_id,block_idx,sel_start,sel_end,passage,author,text,parent_id,pinned,ts
           FROM book_notes WHERE book_id=? AND block_idx BETWEEN ? AND ? ORDER BY block_idx,ts,id`).all(id, from, to);
-        r.json({ ok: true, notes });
+        r.json({ ok: true, notes: withEmotions(notes) });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });
 
@@ -459,9 +470,10 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
         let blockIdx = safeBlockIndex(book, b.block_idx);
         let parentId = Math.max(0, Math.floor(Number(b.parent_id) || 0));
         if (parentId) {
-          const parent = db.prepare('SELECT id,book_id,block_idx FROM book_notes WHERE id=?').get(parentId);
+          const parent = db.prepare('SELECT id,book_id,block_idx,parent_id FROM book_notes WHERE id=?').get(parentId);
           if (!parent || parent.book_id !== book.id) return r.status(400).json({ ok: false, error: '回复目标不存在' });
           blockIdx = Number(parent.block_idx);
+          parentId = Number(parent.parent_id) || parentId;
         }
         const row = db.prepare('SELECT text FROM book_blocks WHERE book_id=? AND idx=?').get(book.id, blockIdx);
         if (!row) return r.status(400).json({ ok: false, error: '批注位置不存在' });
@@ -470,8 +482,11 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
         const noteText = textValue(b.text, 2400);
         if (!noteText) return r.status(400).json({ ok: false, error: '批注不能是空的' });
         const author = String(b.author || 'eve') === 'yu' ? 'yu' : 'eve';
-        const start = Math.max(0, Math.floor(Number(b.sel_start) || 0));
-        const end = Math.max(start, Math.floor(Number(b.sel_end) || start));
+        let start = Math.max(0, Math.floor(Number(b.sel_start) || 0));
+        let end = Math.max(start, Math.floor(Number(b.sel_end) || start));
+        if (passage && String(row.text).slice(start, end) !== passage) {
+          start = String(row.text).indexOf(passage); end = start + passage.length;
+        }
         const ts = Date.now();
         const result = db.prepare(`INSERT INTO book_notes(book_id,block_idx,sel_start,sel_end,passage,author,text,parent_id,pinned,ts)
           VALUES(?,?,?,?,?,?,?,?,?,?)`).run(book.id, blockIdx, start, end, passage, author, noteText, parentId, b.pinned ? 1 : 0, ts);
@@ -490,8 +505,35 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
             },
           },
         });
-        r.json({ ok: true, note });
+        r.json({ ok: true, note: withEmotions([note])[0] });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
+    });
+
+    app.post('/api/book-note/emotion', (q, r) => {
+      const b = q.body || {};
+      const note = db.prepare('SELECT * FROM book_notes WHERE id=? AND book_id=?').get(Number(b.note_id) || 0, String(b.id || ''));
+      if (!note) return r.status(404).json({ ok: false, error: '批注不存在' });
+      const actor = b.actor === 'yu' ? 'yu' : 'eve';
+      if (!['😭', '🙂', '😡', '🤯', ''].includes(b.emoji)) return r.status(400).json({ ok: false, error: '请选择支持的情绪标签' });
+      if (!b.emoji) db.prepare('DELETE FROM book_emotions WHERE note_id=? AND actor=?').run(note.id, actor);
+      else db.prepare('INSERT INTO book_emotions(note_id,actor,emoji,ts) VALUES(?,?,?,?) ON CONFLICT(note_id,actor) DO UPDATE SET emoji=excluded.emoji,ts=excluded.ts').run(note.id, actor, b.emoji, Date.now());
+      r.json({ ok: true, note: withEmotions([note])[0] });
+    });
+
+    app.get('/api/book-review', (q, r) => {
+      const book = bookRow(db, q.query.id);
+      if (!book) return r.status(404).json({ ok: false, error: '找不到这本书' });
+      const first = Number(q.query.from_chapter || 1), last = Number(q.query.to_chapter || first);
+      if (!Number.isInteger(first) || !Number.isInteger(last) || first < 1 || last < first) return r.status(400).json({ ok: false, error: '章节范围无效' });
+      const since = Math.max(0, Number(q.query.since) || 0), after = Math.max(0, Number(q.query.after) || 0);
+      const rows = db.prepare(`SELECT n.*,c.idx AS chapter,c.title AS chapter_title
+        FROM book_notes n JOIN book_blocks b ON b.book_id=n.book_id AND b.idx=n.block_idx
+        JOIN book_chapters c ON c.book_id=b.book_id AND c.idx=b.chapter
+        WHERE n.book_id=? AND c.idx BETWEEN ? AND ? AND n.id>?
+        AND (n.ts>=? OR EXISTS(SELECT 1 FROM book_notes child WHERE child.parent_id=n.id AND child.ts>=?))
+        ORDER BY n.id LIMIT 101`).all(book.id, first-1, last-1, after, since, since);
+      r.json({ ok: true, book: { id: book.id, title: book.title }, notes: withEmotions(rows.slice(0,100)),
+        next: rows.length > 100 ? rows[99].id : null });
     });
 
     app.post('/api/book-note/pin', (q, r) => {
@@ -504,6 +546,16 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
     });
   }
 
+  function withEmotions(notes) {
+    return notes.map(n => ({ ...n, emotions: db.prepare('SELECT actor,emoji,ts FROM book_emotions WHERE note_id=? ORDER BY actor').all(n.id) }));
+  }
+
+  function readingPosition(id, idx) {
+    const chapter = db.prepare('SELECT idx,title,start_block FROM book_chapters WHERE book_id=? AND start_block<=? AND end_block>=? ORDER BY idx DESC LIMIT 1').get(id, idx, idx);
+    return { book_id: id, chapter: chapter ? chapter.idx : 0, chapter_title: chapter ? chapter.title : '',
+      block_idx: idx, paragraph_offset: idx - (chapter ? chapter.start_block : 0), page: Math.floor(idx / 20) + 1 };
+  }
+
   function enrichReading(nr) {
     if (!nr || !nr.id) return nr;
     const book = bookRow(db, nr.id);
@@ -513,7 +565,7 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
     const to = Math.min(Number(book.block_count) - 1, idx + 10);
     const blocks = db.prepare('SELECT idx,chapter,kind,text FROM book_blocks WHERE book_id=? AND idx BETWEEN ? AND ? ORDER BY idx').all(book.id, from, to);
     const chapter = db.prepare('SELECT idx,title,summary FROM book_chapters WHERE book_id=? AND start_block<=? AND end_block>=? ORDER BY idx DESC LIMIT 1').get(book.id, idx, idx);
-    const notes = db.prepare(`SELECT block_idx,passage,author,text,parent_id,ts FROM book_notes
+    const notes = db.prepare(`SELECT id,block_idx,passage,author,text,parent_id,ts FROM book_notes
       WHERE book_id=? AND block_idx BETWEEN ? AND ? ORDER BY ts DESC,id DESC LIMIT 8`).all(book.id, Math.max(0, idx - 6), Math.min(Number(book.block_count) - 1, idx + 6)).reverse();
     nr.id = book.id;
     nr.title = book.title;
@@ -525,8 +577,19 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
     nr.digest = book.digest || '';
     nr.chap_summary = chapter && chapter.summary || '';
     nr.impression = book.mem_summary || '';
-    nr.notes = notes;
+    nr.notes = withEmotions(notes);
+    Object.assign(nr, readingPosition(book.id, idx));
     nr.quote = textValue(nr.quote, 1200);
+    if (nr.mode === 'selection' && nr.quote) {
+      const original = db.prepare('SELECT text FROM book_blocks WHERE book_id=? AND idx=?').get(book.id, idx);
+      if (!original || !original.text.includes(nr.quote)) {
+        const error = new Error('引用内容与正文位置不匹配'); error.status = 400; throw error;
+      }
+    }
+    if (nr.mode === 'selection' || nr.mode === 'review') {
+      // A question about a highlight sends only that quote and its position.
+      delete nr.window; delete nr.digest; delete nr.chap_summary; delete nr.impression; delete nr.notes;
+    }
     return nr;
   }
 
