@@ -2,6 +2,11 @@
 
 const { useState: rUseState, useEffect: rUseEffect, useRef: rUseRef, useMemo: rUseMemo } = React;
 const LS_READER_PAGE = 120;
+function lsReadingChat(options) {
+  const payload=JSON.parse(options.body);
+  if(window.__OMBRE_EMBED && window.parent !== window) return window.__ombreBookChat(payload);
+  return lsBookApi('/chat',options);
+}
 
 function LSMarkedText({ block, notes }) {
   const text = String(block.text || '');
@@ -53,6 +58,19 @@ function LSNoteThread({ root, replies, onReply, onAsk, onPin, onEmotion, aiBusy 
     );
   };
   return <div className="ls-book-thread">{renderNote(root, false)}{(replies || []).map(function (n) { return renderNote(n, true); })}</div>;
+}
+
+function LSParagraphHandle({ block, onSelect }) {
+  const hold = rUseRef(null);
+  const cancel = function () { if (hold.current) clearTimeout(hold.current.timer); hold.current = null; };
+  rUseEffect(function () { return cancel; }, []);
+  return <button className="ls-reading-index" aria-label={'选中第 ' + block.idx + ' 段并提问'}
+    onPointerDown={function(e){cancel();hold.current={x:e.clientX,y:e.clientY,timer:setTimeout(function(){cancel();onSelect(block);},550)};}}
+    onPointerMove={function(e){if(hold.current && Math.hypot(e.clientX-hold.current.x,e.clientY-hold.current.y)>10)cancel();}}
+    onPointerUp={cancel} onPointerCancel={cancel} onPointerLeave={cancel}
+    onContextMenu={function(e){e.preventDefault();}}
+    onClick={function(e){if(e.detail===0)onSelect(block);}}
+  >{block.idx}</button>;
 }
 
 function LSReaderView({ bookId, onBack, onOpenRoom }) {
@@ -205,6 +223,12 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
     });
   };
 
+  const selectParagraph = function (block) {
+    window.getSelection()?.removeAllRanges();
+    setSelection({block_idx:block.idx, sel_start:0, sel_end:block.text.length, passage:block.text, parent_id:0});
+    setDraft('');
+  };
+
   const captureSelection = function () {
     setTimeout(function () {
       const sel = window.getSelection && window.getSelection();
@@ -255,10 +279,10 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
         if (collected.length > 500 || JSON.stringify(collected).length > 90000) throw new Error('记录较多，请缩小章节或时间范围再整理。');
       } while(after);
       if (!collected.length) { setReviewText('这段范围里还没有高亮或讨论。'); return; }
-      const d = await lsBookApi('/chat', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
+      const d = await lsReadingChat({ method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({
         kind:'book', prompt:'请按章节回顾我们一起读过的重点，包含画线原文、我的想法、你的补充和双方的情绪标签。明确标出章节和段落；没有记录的内容不要补写。',
         history:[], ai:window.__lsAiConfig ? window.__lsAiConfig() : undefined,
-        nowReading:{ id:bookId, block_idx:current, mode:'review' }, readingReview:collected
+        nowReading:{ id:bookId, title:meta?.title, block_idx:current, mode:'review' }, readingReview:collected
       }) });
       if (!d.reply) throw new Error('她暂时没有返回整理内容，请重试。');
       setReviewText(d.reply);
@@ -305,11 +329,11 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       const history = thread.map(function (n) { return { role: n.author === 'yu' ? 'assistant' : 'user', content: n.text }; });
       const prompt = '我在正文旁边写了一条批注。请贴着这段文字回应我，像共同阅读时写在页边的一句话，不要讲课。\n'
         + (root.passage ? ('原文：「' + root.passage + '」\n') : '') + '当前想法：' + (newNote ? newNote.text : root.text) + '\n这条高亮的情绪标签：' + JSON.stringify(root.emotions || []);
-      const d = await lsBookApi('/chat', {
+      const d = await lsReadingChat({
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           kind: 'book', prompt: prompt, history: history, ai: window.__lsAiConfig ? window.__lsAiConfig() : undefined,
-          nowReading: { id: bookId, block_idx: root.block_idx, quote: root.passage || '', mode: 'selection' },
+          nowReading: { id: bookId, title:meta?.title, chapter:chapters.slice().reverse().find(c=>c.start_block<=root.block_idx)?.title, block_idx: root.block_idx, quote: root.passage || '', mode: 'selection' },
         }),
       });
       if (!d.reply || !d.reply.trim()) throw new Error('她暂时没有返回回复，请重试。');
@@ -386,21 +410,22 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       </section> : null}
       {error ? <div className="ls-reader-error">{error}<button onClick={function () { setError(''); }}>×</button></div> : null}
 
+      <small className="ls-reader-hint">双击正文或长按左侧空白，可提问或批注；长按正文仍可选词复制。</small>
       <div className="ls-reader-scroll" ref={scrollRef} onScroll={onScroll} onMouseUp={captureSelection} onTouchEnd={captureSelection} style={{ '--reader-size': fontSize + 'px' }}>
         {loading ? <div className="ls-reader-loading">正在翻页…</div> : null}
         {blocks.map(function (block) {
           const blockNotes = grouped[block.idx] || [];
           const roots = blockNotes.filter(function (n) { return !Number(n.parent_id); });
           return (
-            <article className={'ls-reading-block kind-' + block.kind} data-book-block={block.idx} key={block.idx}>
-              <div className="ls-reading-index">{block.idx}</div>
+            <article className={'ls-reading-block kind-' + block.kind} data-book-block={block.idx} key={block.idx}
+              onDoubleClick={function(e){if(e.target.closest('.ls-book-text')){e.preventDefault();selectParagraph(block);}}}>
+              <LSParagraphHandle block={block} onSelect={selectParagraph} />
               {block.kind === 'head'
                 ? <h2><LSMarkedText block={block} notes={blockNotes} /></h2>
                 : block.kind === 'quote'
                   ? <blockquote className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></blockquote>
                   : <p className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></p>}
-              <div className="ls-reading-actions">
-                <button onClick={function(){setSelection({block_idx:block.idx, sel_start:0, sel_end:block.text.length, passage:block.text, parent_id:0});setDraft('');}}>选这段 · 问她／批注</button>
+              <div className="ls-reading-actions" hidden={!roots.length}>
                 {roots.length ? <button aria-expanded={!!expanded[block.idx]} onClick={function(){setExpanded(function(x){return Object.assign({},x,{[block.idx]:!x[block.idx]});});}}>这一段有 {blockNotes.length} 条对话</button> : null}
               </div>
               {roots.length && expanded[block.idx] ? <div className="ls-book-notes">{roots.map(function (root) {

@@ -1485,7 +1485,7 @@ html.ombre-embed .ls-grain {
 html.ombre-embed .ls-nav {
   padding: 9px 8px max(10px, env(safe-area-inset-bottom));
   border-top-color: color-mix(in srgb, var(--ombre-accent, #17a897) 22%, white);
-  background: rgba(255, 255, 255, 0.72);
+  background: color-mix(in srgb, var(--ombre-accent, #17a897) 9%, rgba(255,255,255,.22));
   backdrop-filter: blur(18px);
   -webkit-backdrop-filter: blur(18px);
 }
@@ -1725,3 +1725,15 @@ html.ombre-embed .ls-wall, html.ombre-embed .ls-amb, html.ombre-embed .ls-grain 
 
 html.ombre-embed .ls-book-hero { background:transparent; border:0; box-shadow:none; padding:14px 0; border-radius:0; }
 html.ombre-embed .ls-book-hero::after { display:none; }
+
+/* Quiet reading controls and shared accent glass. */
+.ls-reading-actions[hidden] { display:none; }
+button.ls-reading-index { border:0; background:transparent; cursor:pointer; width:28px; min-height:44px; padding:0; right:100%; top:0; opacity:.45; touch-action:pan-y; user-select:none; -webkit-user-select:none; }
+.ls-reading-index:focus-visible { outline:2px solid var(--ls-gold); border-radius:8px; }
+.ls-reader-hint { display:block; color:var(--ls-ink-dim); font-size:11px; padding:4px 12px; }
+html.ombre-embed .ls-nav { box-shadow:0 -4px 20px #00000008, inset 0 1px 0 #ffffff66; backdrop-filter:blur(24px) saturate(145%); -webkit-backdrop-filter:blur(24px) saturate(145%); }
+html.ombre-embed .ls-reading-actions button,
+html.ombre-embed .ls-reader-review button,
+html.ombre-embed .ls-reader button,
+html.ombre-embed .ls-book-compose button { color:var(--ombre-accent, #17a897); border-color:color-mix(in srgb, var(--ombre-accent, #17a897) 24%, transparent); background:color-mix(in srgb, var(--ombre-accent, #17a897) 10%, transparent); }
+html.ombre-embed button.ls-reading-index { color:var(--ls-ink-faint); background:transparent; }
