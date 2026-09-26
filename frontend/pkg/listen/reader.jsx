@@ -38,7 +38,7 @@ function LSNoteThread({ root, replies, onReply, onAsk, onPin, onEmotion, aiBusy 
         <div className="ls-book-note-head">
           <b>{isYu ? yuName : eveName}</b>
           <span>{window.lsFmtTs ? window.lsFmtTs(note.ts) : ''}</span>
-          {note.pinned ? <i>已记住</i> : null}
+          {note.remembered ? <i>已记住</i> : null}
         </div>
         {note.passage && !reply ? <blockquote>“{note.passage}”</blockquote> : null}
         <p>{note.text}</p>
@@ -52,7 +52,7 @@ function LSNoteThread({ root, replies, onReply, onAsk, onPin, onEmotion, aiBusy 
         <div className="ls-book-note-actions">
           <button onClick={function () { onReply(root); }}>回复</button>
           {!isYu && !reply ? <button disabled={aiBusy} onClick={function () { onAsk(root); }}>{aiBusy ? '她正在读…' : '叫她来'}</button> : null}
-          <button onClick={function () { onPin(note); }}>{note.pinned ? '取消记住' : '记住'}</button>
+          <button onClick={function () { onPin(note); }}>{note.remembered ? '取消记住' : '记住'}</button>
         </div>
       </div>
     );
@@ -83,6 +83,14 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
   const [current, setCurrent] = rUseState(0);
   const [loading, setLoading] = rUseState(true);
   const [error, setError] = rUseState('');
+  const [syncStatus, setSyncStatus] = rUseState(window.__ombreReadingSyncStatus || '');
+  rUseEffect(function(){
+    const update=function(e){setSyncStatus(e.detail);};
+    window.addEventListener('ombre:reading-sync',update);
+    return function(){window.removeEventListener('ombre:reading-sync',update);};
+  },[]);
+  const syncReading = function() { if(window.__ombreSyncReading) void window.__ombreSyncReading().catch(function(){}); };
+
   const [selection, setSelection] = rUseState(null);
   const [draft, setDraft] = rUseState('');
   const [saving, setSaving] = rUseState(false);
@@ -264,6 +272,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       const d = await lsBookApi('/book-note/emotion', { method:'POST', headers:{'Content-Type':'application/json'},
         body:JSON.stringify({ id:bookId, note_id:note.id, actor:actor, emoji:emoji }) });
       setNotes(function (list) { return list.map(function (n) { return n.id === note.id ? d.note : n; }); });
+      syncReading();
     } catch(e) { setError(e.message); }
   };
 
@@ -296,6 +305,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       body: JSON.stringify(payload),
     }).then(function (d) {
       setNotes(function (list) { return (list || []).concat([d.note]); });
+      syncReading();
       return d.note;
     });
   };
@@ -343,14 +353,15 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
     setAiBusy(0);
   };
 
-  const pinNote = function (note) {
-    const next = !note.pinned;
-    lsBookApi('/book-note/pin', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ id: note.id, pinned: next }),
-    }).then(function () {
-      setNotes(function (list) { return list.map(function (n) { return n.id === note.id ? Object.assign({}, n, { pinned: next ? 1 : 0 }) : n; }); });
-    }).catch(function (e) { setError(e.message); });
+  const pinNote = async function (note) {
+    const next = !note.remembered;
+    try {
+      if (!window.__ombreRememberReading || window.parent === window) throw new Error('请在 Entangle 内打开共读，才能保存到她的长期记忆。');
+      const receipt = await window.__ombreRememberReading(bookId,note.id,next);
+      await lsBookApi('/book-note/pin', {method:'POST',headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({id:note.id,pinned:next,memory_id:receipt.memory_id})});
+      setNotes(function(list){return list.map(function(n){return n.id===note.id?Object.assign({},n,{pinned:next?1:0,remembered:next}):n;});});
+    } catch(e) {setError('记忆操作未完成：'+e.message);}
   };
 
   const grouped = rUseMemo(function () {
@@ -410,6 +421,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       </section> : null}
       {error ? <div className="ls-reader-error">{error}<button onClick={function () { setError(''); }}>×</button></div> : null}
 
+      <small className="ls-reader-hint" role="status">{syncStatus}</small>
       <small className="ls-reader-hint">双击正文或长按左侧空白，可提问或批注；长按正文仍可选词复制。</small>
       <div className="ls-reader-scroll" ref={scrollRef} onScroll={onScroll} onMouseUp={captureSelection} onTouchEnd={captureSelection} style={{ '--reader-size': fontSize + 'px' }}>
         {loading ? <div className="ls-reader-loading">正在翻页…</div> : null}

@@ -116,6 +116,26 @@ try {
   const pageTwo = await fetch(base + '/book-review?id=' + imported.book.id + '&from_chapter=1&to_chapter=5&after='+pageOne.next).then(r=>r.json());
   assert.equal(pageOne.notes.length,100); assert.equal(pageTwo.notes.length,7); assert.equal(pageTwo.next,null);
 
+  let exported=[],cursor=0;
+  do {
+    const page=await fetch(base+'/reading-export?after='+cursor).then(r=>r.json());
+    assert.ok(page.records.length<=20);
+    exported.push(...page.records);cursor=page.next;
+  } while(cursor!==null);
+  assert.equal(exported.length,107);
+  assert.equal(new Set(exported.map(n=>n.id)).size,107);
+  assert.equal(exported[1].passage,passage);
+  assert.equal(exported[0].chapter,review.notes[0].chapter+1);
+  assert.equal(exported[0].emotions.length,2);
+  // A former local pin alone must never claim a memory was saved.
+  assert.equal(exported[0].remembered,false);
+  await fetch(base+'/book-note/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:note.note.id,pinned:true,memory_id:'test-receipt'})});
+  const remembered=await fetch(base+'/book-notes?id='+imported.book.id+'&to=50').then(r=>r.json());
+  assert.equal(remembered.notes[0].remembered,true);
+  await fetch(base+'/book-note/pin',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({id:note.note.id,pinned:false})});
+  const cancelled=await fetch(base+'/book-notes?id='+imported.book.id+'&to=50').then(r=>r.json());
+  assert.equal(cancelled.notes[0].remembered,false);
+
   const epub = zipSync({
     'META-INF/container.xml': strToU8('<?xml version="1.0"?><container><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>'),
     'OEBPS/content.opf': strToU8('<?xml version="1.0"?><package><metadata><dc:title>EPUB 测试书</dc:title><dc:creator>Duetto</dc:creator><dc:language>zh</dc:language></metadata><manifest><item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>'),

@@ -275,6 +275,7 @@ export function initBookSchema(db) {
       sel_start INTEGER DEFAULT 0, sel_end INTEGER DEFAULT 0, passage TEXT DEFAULT '',
       author TEXT, text TEXT, parent_id INTEGER DEFAULT 0, pinned INTEGER DEFAULT 0, ts INTEGER
     );
+    CREATE TABLE IF NOT EXISTS book_memory_receipts(note_id INTEGER PRIMARY KEY, memory_id TEXT);
     CREATE TABLE IF NOT EXISTS book_emotions(
       note_id INTEGER, actor TEXT, emoji TEXT, ts INTEGER,
       PRIMARY KEY(note_id, actor)
@@ -451,6 +452,17 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });
 
+    app.get('/api/reading-export', (q,r) => {
+      const after = Math.max(0, Math.floor(Number(q.query.after) || 0));
+      const rows = db.prepare(`SELECT n.*, b.title, c.idx+1 AS chapter, c.title AS chapter_title,
+        COALESCE(NULLIF(n.passage,''),root.passage,'') AS passage
+        FROM book_notes n JOIN books b ON b.id=n.book_id
+        LEFT JOIN book_notes root ON root.id=n.parent_id AND root.book_id=n.book_id
+        LEFT JOIN book_chapters c ON c.book_id=n.book_id AND n.block_idx BETWEEN c.start_block AND c.end_block
+        WHERE n.id>? ORDER BY n.id LIMIT 21`).all(after);
+      r.json({ok:true,records:withEmotions(rows.slice(0,20)),next:rows.length>20?rows[19].id:null});
+    });
+
     app.get('/api/book-notes', (q, r) => {
       try {
         const id = textValue(q.query.id, 64);
@@ -540,14 +552,17 @@ export function createBookService({ db, dataDir, assertPublicUrl, fetchCapped, e
       try {
         const id = Math.max(0, Math.floor(Number(q.body && q.body.id) || 0));
         const pinned = q.body && q.body.pinned === false ? 0 : 1;
+        if (!db.prepare('SELECT id FROM book_notes WHERE id=?').get(id)) return r.status(404).json({ok:false,error:'批注不存在'});
         db.prepare('UPDATE book_notes SET pinned=? WHERE id=?').run(pinned, id);
+        if (!pinned) db.prepare('DELETE FROM book_memory_receipts WHERE note_id=?').run(id);
+        else if (q.body.memory_id) db.prepare('INSERT OR REPLACE INTO book_memory_receipts(note_id,memory_id) VALUES(?,?)').run(id, String(q.body.memory_id).slice(0,160));
         r.json({ ok: true, pinned: !!pinned });
       } catch (e) { r.status(500).json({ ok: false, error: e.message }); }
     });
   }
 
   function withEmotions(notes) {
-    return notes.map(n => ({ ...n, emotions: db.prepare('SELECT actor,emoji,ts FROM book_emotions WHERE note_id=? ORDER BY actor').all(n.id) }));
+    return notes.map(n => ({ ...n, remembered: !!db.prepare('SELECT memory_id FROM book_memory_receipts WHERE note_id=?').get(n.id), emotions: db.prepare('SELECT actor,emoji,ts FROM book_emotions WHERE note_id=? ORDER BY actor').all(n.id) }));
   }
 
   function readingPosition(id, idx) {
