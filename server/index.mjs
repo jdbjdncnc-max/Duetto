@@ -1,4 +1,5 @@
 import express from 'express';
+import { sharedBudgetTarget } from './shared-budget.mjs';
 import compression from 'compression';
 import http from 'http';
 import { WebSocketServer } from 'ws';
@@ -296,7 +297,7 @@ function maybeImpress(s, sid, title, artist){
         let head = '把你和' + who2 + '一起听《' + (title || '') + '》' + (artist ? ('—' + artist) : '') + '的这些片段，揉成一段第一人称回忆总结。';
         if (impr && impr.text) head += '这是之前的总结，在它基础上自然续写别推翻：\n' + impr.text + '\n\n';
         head += '150字内，写你们和这首歌的故事与情绪流变，温柔具体，直接出正文，不要分点、不要标签。';
-        const text = await callLLM(withAnalysisAi(s), [{ role: 'system', content: head }, { role: 'user', content: '新片段：\n' + lines }]);
+        const text = await callLLM(withAnalysisAi(s), [{ role: 'system', content: head }, { role: 'user', content: '新片段：\n' + lines }], {background:true});
         if (text) {
           const now2 = Date.now();
           db.prepare('INSERT INTO songs(id,title,artist,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(id) DO NOTHING').run(sid, title || '', artist || '', now2, now2);
@@ -387,7 +388,7 @@ function ensureAnalysis(s, np){
         if (audioB64) {
           const prompt = '你会收到一首歌的完整音频。请真的去听这首歌（不要凭歌名或常识编造），然后用中文做一份分时间段的赏析。开头第一行写「' + head + '」。\n按时间顺序自然分段，尽量带上大致时间点（如 0:00、0:45、1:30）：曲式结构（前奏/主歌/副歌/桥段/尾奏分别在哪个时间段）；情绪走向随时间如何起伏；人声状态（真假声切换、气声、爆发力等细节）；编曲变化（乐器层次、动态的增减）；最戳人的几句歌词。总字数控制在 450 字以内（这段会被注入对话上下文）。' + (lrc ? ('\n\n[完整歌词，行首[分:秒]是时间轴，引用歌词以这里为准]\n' + String(lrc).slice(0, 6000)) : '');
           try {
-            text = await callLLM(s2, [{ role: 'user', content: [ { type: 'text', text: prompt }, { type: 'input_audio', input_audio: { data: audioB64, format: 'mp3' } } ] }], { timeout: 100000 });
+            text = await callLLM(s2, [{ role: 'user', content: [ { type: 'text', text: prompt }, { type: 'input_audio', input_audio: { data: audioB64, format: 'mp3' } } ] }], { timeout: 100000, background:true });
           } catch(e){ console.log('[analysis audio llm fail]', sid, e.message.slice(0, 200)); }
           if (text) usedAudio = true;
         }
@@ -395,7 +396,7 @@ function ensureAnalysis(s, np){
           text = await callLLM(s2, [
             { role: 'system', content: '你在认真听一首歌。下面是它的完整歌词，行首[分:秒]是时间轴。用中文写一份随时间推进的听后赏析：曲式怎么铺开（主歌/副歌/桥段大致在哪一段）、情绪随时间怎么起伏、歌词里最戳你的两三句和为什么。第一人称，写给自己的备忘（之后会作为你聊天时的背景），450字以内，自然分段，不要罗列时间戳、不要标题、不要分点符号。' },
             { role: 'user', content: '歌：' + (np.title || '') + (np.artist ? (' — ' + np.artist) : '') + (lrc ? ('\n完整歌词：\n' + String(lrc).slice(0, 6000)) : '') }
-          ]);
+          ], {background:true});
         }
         if (text) appendAnalysis({ id: sid, title: np.title || '', artist: np.artist || '', text, ts: Date.now() });
         console.log('[analysis]', sid, 'by', s2.ai.model, usedAudio ? '(audio)' : '(text)', text ? 'ok' : 'empty');
@@ -458,10 +459,11 @@ async function callLLMResult(s,messages,over){
   const base=String(s.ai.base_url||'').replace(/\/+$/,'');
   if(!s.ai.api_key)throw Object.assign(new Error('AI not configured'),{status:503});
   const requestedModel=(over&&over.model)||s.ai.model;
-  const headers={'Content-Type':'application/json',Authorization:'Bearer '+s.ai.api_key};
+  const target=sharedBudgetTarget(s.ai);
+  const headers={'Content-Type':'application/json',Authorization:'Bearer '+target.key};
   if(over&&over.recallInjected)headers['X-Ombre-Recall-Mode']='injected';
-  const rr=await fetchT(base+'/chat/completions',{method:'POST',headers,body:JSON.stringify({model:requestedModel,temperature:0.9,max_tokens:1024,messages})},(over&&over.timeout)||45000);
-  if(!rr.ok){const t=await rr.text().catch(()=>'');throw Object.assign(new Error('LLM '+rr.status+': '+t.slice(0,200)),{status:502});}
+  const rr=await fetchT(target.url,{method:'POST',headers,body:JSON.stringify({model:requestedModel,temperature:0.9,max_tokens:1024,messages,background:Boolean(over&&over.background)})},(over&&over.timeout)||45000);
+  if(!rr.ok){const d=await rr.json().catch(()=>({}));throw Object.assign(new Error(d.error?.message||'模型请求失败 '+rr.status),{status:rr.status===402?402:502});}
   const d=await rr.json();
   return {
     text:(d.choices&&d.choices[0]&&d.choices[0].message&&d.choices[0].message.content||'').trim(),

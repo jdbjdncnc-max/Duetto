@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
+import { sharedBudgetTarget } from '../server/shared-budget.mjs';
 import { fileURLToPath } from 'node:url';
 
 
@@ -62,6 +63,7 @@ assert.equal(Object.hasOwn(JSON.parse(capturedRequest.options.body), 'context_mo
 
 let capturedLlmRequest = null;
 const llmSandbox = {
+  sharedBudgetTarget,
   fetchT: async (url, options, timeout) => {
     capturedLlmRequest = { url, options, timeout };
     return {
@@ -77,11 +79,15 @@ vm.runInContext(
   llmSandbox,
 );
 await llmSandbox.callLLMResultUnderTest(
-  { ai: { base_url: 'https://ombre.example/v1', api_key: 'gateway-secret', model: 'chat-model' } },
+  { ai: { base_url: 'https://provider.example/v1', api_key: 'provider-secret', context_url:'https://ombre.example/api/duetto/context', context_key:'gateway-secret', model: 'chat-model' } },
   [{ role: 'user', content: 'hello' }],
   { recallInjected: true },
 );
 assert.equal(capturedLlmRequest.options.headers['X-Ombre-Recall-Mode'], 'injected');
+assert.equal(capturedLlmRequest.url, 'https://ombre.example/api/budget/duetto-completion');
+assert.equal(capturedLlmRequest.options.headers.Authorization, 'Bearer gateway-secret');
+assert.ok(!JSON.stringify(capturedLlmRequest).includes('provider-secret'));
+assert.throws(() => sharedBudgetTarget({}, {}), /共享|共用/);
 
 const syncSource = fs.readFileSync(path.join(root, 'frontend', 'pkg', 'sync.js'), 'utf8');
 const bridgeSource = fs.readFileSync(path.join(root, 'frontend', 'pkg', 'claude-bridge.js'), 'utf8');
