@@ -12,7 +12,11 @@
     root.style.setProperty('--ombre-accent', accent);
   }
 
-  var parentOrigin = '', requests = new Map();
+  var parentOrigin = '', requests = new Map(), readerState = {active:false};
+  window.__ombreSetReaderState = function(state) {
+    readerState = state;
+    if(parentOrigin) window.parent.postMessage({type:'duetto:reader-state',reader:state},parentOrigin);
+  };
   function hostRequest(type, content) {
     if (!parentOrigin) return Promise.reject(new Error('请先更新 Entangle 应用，再使用内嵌共读。'));
     return new Promise(function(resolve,reject){
@@ -67,9 +71,19 @@
       if(data.error)request.reject(new Error(data.error)); else request.resolve(data.result);
       return;
     }
+    if (data.type === 'ombre:reader-command' && event.origin === parentOrigin) {
+      if (['contents','review','back'].indexOf(data.action) !== -1)
+        window.dispatchEvent(new CustomEvent('ombre:reader-command',{detail:data.action}));
+      return;
+    }
     if (data.type !== 'ombre:theme') return;
     if(data.bookChat === true)parentOrigin=event.origin;
     applyAccent(data.accent);
+    if (data.readerControls === true && parentOrigin) {
+      window.__ombreReaderHost = true;
+      window.dispatchEvent(new CustomEvent('ombre:reader-host'));
+      window.__ombreSetReaderState(readerState);
+    }
     if(data.readingRecords===true && !syncReady){syncReady=true;retrySync();}
   });
 

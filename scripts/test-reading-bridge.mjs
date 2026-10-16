@@ -2,10 +2,11 @@ import fs from 'node:fs';
 import vm from 'node:vm';
 import assert from 'node:assert/strict';
 let listener,sent;
+const readerEvents=[];
 const parent={postMessage:(body,origin)=>{sent={body,origin};}};
-const sandbox={URLSearchParams,Map,Promise,Error,String,crypto:{randomUUID:()=>"request-one"},setTimeout:()=>1,clearTimeout:()=>{},setInterval:()=>1,
+const sandbox={URLSearchParams,Map,Promise,Error,String,CustomEvent:function(type,options){this.type=type;this.detail=options?.detail;},crypto:{randomUUID:()=>"request-one"},setTimeout:()=>1,clearTimeout:()=>{},setInterval:()=>1,
  document:{documentElement:{classList:{add(){}},style:{setProperty(){}}},readyState:'loading',addEventListener(){}},
- window:{parent,location:{search:'?embed=ombre'},addEventListener:(_,fn)=>listener=fn}};
+ window:{parent,location:{search:'?embed=ombre'},addEventListener:(_,fn)=>listener=fn,dispatchEvent:e=>readerEvents.push(e)}};
 vm.createContext(sandbox);
 vm.runInContext(fs.readFileSync(new URL('../frontend/pkg/ombre-embed.js',import.meta.url),'utf8'),sandbox);
 await assert.rejects(sandbox.window.__ombreBookChat({}),/更新/);
@@ -17,6 +18,24 @@ listener({source:parent,origin:'https://wrong.example',data:{type:'ombre:book-ch
 listener({source:parent,origin:'https://host.example',data:{type:'ombre:book-chat-result',id:'request-one',result:{reply:'收到'}}});
 assert.equal((await pending).reply,'收到');
 console.log('reading bridge handshake, credential isolation and reply origin passed');
+
+sandbox.window.__ombreSetReaderState({active:true,title:'书名',panel:'contents'});
+listener({source:parent,origin:'https://host.example',data:{type:'ombre:theme',bookChat:true,readerControls:true}});
+assert.equal(sent.body.type,'duetto:reader-state');
+assert.equal(sent.body.reader.title,'书名');
+assert.equal(sent.origin,'https://host.example');
+assert.equal(sandbox.window.__ombreReaderHost,true);
+for(const event of [
+ {source:{},origin:'https://host.example',data:{type:'ombre:reader-command',action:'contents'}},
+ {source:parent,origin:'https://wrong.example',data:{type:'ombre:reader-command',action:'contents'}},
+ {source:parent,origin:'https://host.example',data:{type:'ombre:reader-command',action:'unknown'}},
+]) listener(event);
+assert.equal(readerEvents.filter(e=>e.type==='ombre:reader-command').length,0);
+for(const action of ['contents','review','back']) listener({source:parent,origin:'https://host.example',data:{type:'ombre:reader-command',action}});
+assert.deepEqual(readerEvents.filter(e=>e.type==='ombre:reader-command').map(e=>e.detail),['contents','review','back']);
+sandbox.window.__ombreSetReaderState({active:false});
+assert.equal(sent.body.reader.active,false);
+console.log('reader header state survives handshake; only trusted host commands reach reader');
 
 // Exercise long-press cancellation using the real JSX component and fake clock.
 const babel={};vm.createContext(babel);

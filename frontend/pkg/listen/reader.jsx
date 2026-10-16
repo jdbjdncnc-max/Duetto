@@ -8,23 +8,42 @@ function lsReadingChat(options) {
   return lsBookApi('/chat',options);
 }
 
-function LSMarkedText({ block, notes }) {
+function LSMarkedText({ block, notes, expanded, onToggle }) {
   const text = String(block.text || '');
-  const ranges = (notes || []).filter(function (n) {
-    return Number(n.sel_end) > Number(n.sel_start) && n.passage;
-  }).map(function (n) {
-    return { start: Math.max(0, Number(n.sel_start) || 0), end: Math.min(text.length, Number(n.sel_end) || 0), author: n.author, id: n.id };
-  }).filter(function (n) { return n.end > n.start; }).sort(function (a, b) { return a.start - b.start || a.end - b.end; });
-  if (!ranges.length) return <span className="ls-book-text">{text}</span>;
+  const roots = (notes || []).filter(n => !Number(n.parent_id));
+  const ranges = roots.map(function(n) {
+    let start = Math.max(0, Number(n.sel_start) || 0);
+    let end = Math.min(text.length, Number(n.sel_end) || 0);
+    if (end <= start && n.passage) {
+      const found = text.indexOf(n.passage);
+      if (found >= 0) {start = found; end = found + n.passage.length;}
+    }
+    // Older paragraph conversations may have no stored selection offsets.
+    if (end <= start) {start = 0; end = text.length;}
+    return {start, end, author:n.author};
+  }).filter(n => n.end > n.start).sort((a,b) => a.start - b.start || a.end - b.end);
+  const merged = [];
+  ranges.forEach(function(range) {
+    const last = merged[merged.length - 1];
+    if (last && range.start <= last.end) last.end = Math.max(last.end, range.end);
+    else merged.push(Object.assign({}, range));
+  });
   const pieces = [];
   let at = 0;
-  ranges.forEach(function (range) {
-    if (range.start < at) return;
-    if (range.start > at) pieces.push(<React.Fragment key={'t' + at}>{text.slice(at, range.start)}</React.Fragment>);
-    pieces.push(<mark key={'m' + range.id} className={range.author === 'yu' ? 'is-yu' : 'is-eve'}>{text.slice(range.start, range.end)}</mark>);
+  merged.forEach(function(range) {
+    if (range.start > at) pieces.push(<React.Fragment key={'t'+at}>{text.slice(at,range.start)}</React.Fragment>);
+    const toggle = function(e) {
+      if (window.getSelection && !window.getSelection().isCollapsed) return;
+      e.stopPropagation(); onToggle();
+    };
+    pieces.push(<mark key={'m'+range.start} className={range.author === 'yu' ? 'is-yu' : 'is-eve'}
+      role="button" tabIndex={0} aria-label="查看这段对话" aria-expanded={expanded} aria-controls={'book-notes-'+block.idx}
+      onClick={toggle} onDoubleClick={e => e.stopPropagation()}
+      onKeyDown={function(e){if(e.key === 'Enter' || e.key === ' '){e.preventDefault();toggle(e);}}}>
+      {text.slice(range.start,range.end)}</mark>);
     at = range.end;
   });
-  if (at < text.length) pieces.push(<React.Fragment key={'t' + at}>{text.slice(at)}</React.Fragment>);
+  if (at < text.length) pieces.push(<React.Fragment key={'t'+at}>{text.slice(at)}</React.Fragment>);
   return <span className="ls-book-text">{pieces}</span>;
 }
 
@@ -83,12 +102,6 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
   const [current, setCurrent] = rUseState(0);
   const [loading, setLoading] = rUseState(true);
   const [error, setError] = rUseState('');
-  const [syncStatus, setSyncStatus] = rUseState(window.__ombreReadingSyncStatus || '');
-  rUseEffect(function(){
-    const update=function(e){setSyncStatus(e.detail);};
-    window.addEventListener('ombre:reading-sync',update);
-    return function(){window.removeEventListener('ombre:reading-sync',update);};
-  },[]);
   const syncReading = function() { if(window.__ombreSyncReading) void window.__ombreSyncReading().catch(function(){}); };
 
   const [selection, setSelection] = rUseState(null);
@@ -96,7 +109,26 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
   const [saving, setSaving] = rUseState(false);
   const [aiBusy, setAiBusy] = rUseState(0);
   const [expanded, setExpanded] = rUseState({});
-  const [reviewOpen, setReviewOpen] = rUseState(false);
+  const [panel, setPanel] = rUseState('');
+  const reviewOpen = panel === 'review';
+  const [hostControls, setHostControls] = rUseState(!!window.__ombreReaderHost);
+  rUseEffect(function() {
+    const hosted = function(){setHostControls(true);};
+    const command = function(e){
+      if(e.detail === 'back') onBack();
+      else setPanel(current => current === e.detail ? '' : e.detail);
+    };
+    window.addEventListener('ombre:reader-host',hosted);
+    window.addEventListener('ombre:reader-command',command);
+    return function(){
+      window.removeEventListener('ombre:reader-host',hosted);
+      window.removeEventListener('ombre:reader-command',command);
+      if(window.__ombreSetReaderState) window.__ombreSetReaderState({active:false});
+    };
+  },[onBack]);
+  rUseEffect(function(){
+    if(window.__ombreSetReaderState) window.__ombreSetReaderState({active:true,title:meta?.title || '共读',panel});
+  },[meta?.title,panel,hostControls,onBack]);
   const [reviewFrom, setReviewFrom] = rUseState(1);
   const [reviewTo, setReviewTo] = rUseState(5);
   const [reviewDays, setReviewDays] = rUseState(0);
@@ -220,7 +252,7 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       scrollTick.current = 0;
       const host = scrollRef.current;
       if (!host) return;
-      const top = host.getBoundingClientRect().top + 118;
+      const top = host.getBoundingClientRect().top + 24;
       let best = null;
       host.querySelectorAll('[data-book-block]').forEach(function (el) {
         const d = Math.abs(el.getBoundingClientRect().top - top);
@@ -379,40 +411,19 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
 
   return (
     <div className="ls-body ls-reader">
-      <div className="ls-reader-head">
-        <button className="ls-reader-back" onClick={onBack} aria-label="回到书架">‹</button>
-        <div className="ls-reader-title"><b>{meta ? meta.title : '阅读'}</b><span>{currentChapter ? currentChapter.title : (meta && meta.author) || ''}</span></div>
-        <button className={'ls-reader-follow' + (follow ? ' on' : '')} onClick={function () { setFollow(function (v) { return !v; }); }}>
-          <i></i>{follow ? '跟随 TA' : '各读各的'}
-        </button>
-      </div>
-
-      <div className="ls-reader-progress">
-        <i style={{ width: pct + '%' }}></i>
-        {remote && meta && Number(meta.block_count) > 1 ? <b title={'TA 读到 ' + (remote.pct || 0).toFixed(1) + '%'} style={{ left: Math.max(0, Math.min(100, remote.block_idx / (Number(meta.block_count) - 1) * 100)) + '%' }}></b> : null}
-      </div>
-
-      <div className="ls-reader-tools">
-        <select value={currentChapter ? currentChapter.idx : 0} onChange={function (e) {
-          const chapter = chapters.find(function (c) { return Number(c.idx) === Number(e.target.value); });
-          if (chapter) goTo(chapter.start_block);
-        }}>
-          {chapters.map(function (c) { return <option key={c.idx} value={c.idx}>{c.title}</option>; })}
-        </select>
-        <div className="ls-reader-size">
-          <button onClick={function () { setFontSize(function (v) { return Math.max(15, v - 1); }); }}>A−</button>
-          <span>{fontSize}</span>
-          <button onClick={function () { setFontSize(function (v) { return Math.min(28, v + 1); }); }}>A＋</button>
-        </div>
-        <button className="ls-reader-room" onClick={function () {
-          window.__lsPendingQuote = { line: '', kind: 'book', book: meta && meta.title, book_id: bookId, block_idx: current };
-          onOpenRoom && onOpenRoom();
-        }}>房间</button>
-      </div>
-
-      <div className="ls-reading-actions"><button onClick={function(){setReviewOpen(!reviewOpen);}}>回顾我们读过的</button>
-        <span>第 {Math.floor(current / 20) + 1} 页 · 每 20 段一页</span></div>
-      {reviewOpen ? <section className="ls-reader-review">
+      {!hostControls ? <header className="ls-reader-compact-head">
+        <button onClick={onBack} aria-label="回到书架">‹</button>
+        <strong>{meta?.title || '共读'}</strong>
+        <button aria-expanded={panel === 'contents'} onClick={() => setPanel(panel === 'contents' ? '' : 'contents')}>目录</button>
+        <button aria-expanded={reviewOpen} onClick={() => setPanel(reviewOpen ? '' : 'review')}>回顾</button>
+      </header> : null}
+      {panel === 'contents' ? <nav className="ls-reader-contents" aria-label="目录">
+        <div className="ls-reader-panel-heading"><strong>目录</strong><button onClick={() => setPanel('')} aria-label="关闭目录">×</button></div>
+        {chapters.length ? chapters.map(c => <button key={c.idx} aria-current={currentChapter?.idx === c.idx ? 'location' : undefined}
+          onClick={() => {goTo(c.start_block);setPanel('');}}>{c.title}</button>) : <p>暂无目录</p>}
+      </nav> : null}
+      {reviewOpen ? <section className="ls-reader-review" aria-label="回顾">
+        <div className="ls-reader-panel-heading"><strong>回顾</strong><button onClick={() => setPanel('')} aria-label="关闭回顾">×</button></div>
         <label>从第 <input aria-label="起始章节" type="number" min="1" value={reviewFrom} onChange={function(e){setReviewFrom(Number(e.target.value));}}/> 节</label>
         <label>到第 <input aria-label="结束章节" type="number" min="1" max={chapters.length} value={reviewTo} onChange={function(e){setReviewTo(Number(e.target.value));}}/> 节</label>
         <select aria-label="复盘时间范围" value={reviewDays} onChange={function(e){setReviewDays(Number(e.target.value));}}><option value="0">全部时间</option><option value="7">最近 7 天</option><option value="30">最近 30 天</option></select>
@@ -421,8 +432,6 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
       </section> : null}
       {error ? <div className="ls-reader-error">{error}<button onClick={function () { setError(''); }}>×</button></div> : null}
 
-      <small className="ls-reader-hint" role="status">{syncStatus}</small>
-      <small className="ls-reader-hint">双击正文或长按左侧空白，可提问或批注；长按正文仍可选词复制。</small>
       <div className="ls-reader-scroll" ref={scrollRef} onScroll={onScroll} onMouseUp={captureSelection} onTouchEnd={captureSelection} style={{ '--reader-size': fontSize + 'px' }}>
         {loading ? <div className="ls-reader-loading">正在翻页…</div> : null}
         {blocks.map(function (block) {
@@ -430,17 +439,17 @@ function LSReaderView({ bookId, onBack, onOpenRoom }) {
           const roots = blockNotes.filter(function (n) { return !Number(n.parent_id); });
           return (
             <article className={'ls-reading-block kind-' + block.kind} data-book-block={block.idx} key={block.idx}
-              onDoubleClick={function(e){if(e.target.closest('.ls-book-text')){e.preventDefault();selectParagraph(block);}}}>
+              onDoubleClick={function(e){if(!e.target.closest('mark') && e.target.closest('.ls-book-text')){e.preventDefault();selectParagraph(block);}}}>
               <LSParagraphHandle block={block} onSelect={selectParagraph} />
               {block.kind === 'head'
-                ? <h2><LSMarkedText block={block} notes={blockNotes} /></h2>
+                ? <h2><LSMarkedText block={block} notes={blockNotes} expanded={!!expanded[block.idx]}
+                    onToggle={() => setExpanded(x => Object.assign({},x,{[block.idx]:!x[block.idx]}))} /></h2>
                 : block.kind === 'quote'
-                  ? <blockquote className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></blockquote>
-                  : <p className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} /></p>}
-              <div className="ls-reading-actions" hidden={!roots.length}>
-                {roots.length ? <button aria-expanded={!!expanded[block.idx]} onClick={function(){setExpanded(function(x){return Object.assign({},x,{[block.idx]:!x[block.idx]});});}}>这一段有 {blockNotes.length} 条对话</button> : null}
-              </div>
-              {roots.length && expanded[block.idx] ? <div className="ls-book-notes">{roots.map(function (root) {
+                  ? <blockquote className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} expanded={!!expanded[block.idx]}
+                    onToggle={() => setExpanded(x => Object.assign({},x,{[block.idx]:!x[block.idx]}))} /></blockquote>
+                  : <p className="ls-reading-copy"><LSMarkedText block={block} notes={blockNotes} expanded={!!expanded[block.idx]}
+                    onToggle={() => setExpanded(x => Object.assign({},x,{[block.idx]:!x[block.idx]}))} /></p>}
+              {roots.length && expanded[block.idx] ? <div className="ls-book-notes" id={'book-notes-'+block.idx}>{roots.map(function (root) {
                 return <LSNoteThread key={root.id} root={root} replies={blockNotes.filter(function (n) { return Number(n.parent_id) === Number(root.id); })} aiBusy={aiBusy === root.id}
                   onReply={function (note) { setSelection({ block_idx: note.block_idx, passage: note.passage || '', parent_id: note.id }); setDraft(''); }}
                   onAsk={askAI} onPin={pinNote} onEmotion={setEmotion} />;

@@ -1737,3 +1737,18 @@ html.ombre-embed .ls-reader-review button,
 html.ombre-embed .ls-reader button,
 html.ombre-embed .ls-book-compose button { color:var(--ombre-accent, #17a897); border-color:color-mix(in srgb, var(--ombre-accent, #17a897) 24%, transparent); background:color-mix(in srgb, var(--ombre-accent, #17a897) 10%, transparent); }
 html.ombre-embed button.ls-reading-index { color:var(--ls-ink-faint); background:transparent; }
+
+/* Reading chrome lives in the host header; panels appear only on request. */
+.ls-reader-compact-head { display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--ls-line); flex:none; }
+.ls-reader-compact-head strong { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:16px; }
+.ls-reader-compact-head button { min-height:44px; padding:8px; font-size:14px; }
+.ls-reader-contents { flex:none; max-height:55vh; overflow:auto; padding:12px 18px; border-bottom:1px solid var(--ls-line); }
+.ls-reader-panel-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:8px; }
+.ls-reader-panel-heading button { min-width:44px; min-height:44px; font-size:22px; }
+.ls-reader-contents > button { display:block; width:100%; text-align:left; padding:12px 4px; min-height:44px; border:0; border-bottom:1px solid var(--ls-line-soft); border-radius:0; font:inherit; }
+html.ombre-embed .ls-reader-contents > button { background:transparent; }
+.ls-reader-contents > button[aria-current] { font-weight:700; text-decoration:underline; text-underline-offset:5px; }
+.ls-reader-review { flex:none; }
+.ls-book-text mark[role="button"] { cursor:pointer; -webkit-tap-highlight-color:transparent; }
+.ls-book-text mark[role="button"]:focus-visible { outline:2px solid var(--ls-gold); outline-offset:3px; }
+.ls-book-text mark[aria-expanded="true"] { text-decoration:underline; text-underline-offset:4px; }
